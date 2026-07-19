@@ -1,0 +1,19 @@
+# Dependency directories
+node_modules/
+
+# Build outputs
+dist/
+dist-electron/
+release/
+
+# IDE / Editor configuration
+.idea/
+.vscode/
+.superpowers/
+
+# Backup / Log files
+*.log
+.gemini/
+
+# Project-specific exclusions
+HTML_reference/
