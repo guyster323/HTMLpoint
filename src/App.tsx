@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { CSSProperties } from 'react';
 import {
   addImageAnnotation,
+  addImageArrowAnnotation,
   addTableColumn,
   addTableRow,
   applyTextEffect,
@@ -114,6 +115,7 @@ export function App(): JSX.Element {
   const [propertiesWidth, setPropertiesWidth] = useState(330);
   const [resizingProperties, setResizingProperties] = useState(false);
   const [selectionSnapshots, setSelectionSnapshots] = useState<Record<string, SelectionVisualSnapshot>>({});
+  const [imageArrowModeNodeId, setImageArrowModeNodeId] = useState<string>();
   const [pendingInsertionFeedback, setPendingInsertionFeedback] = useState<{
     requestId: string;
     successMessage: string;
@@ -371,6 +373,41 @@ export function App(): JSX.Element {
       }
 
       if (
+        event.data.type === 'htmlpoint-add-image-arrow' &&
+        typeof event.data.nodeId === 'string' &&
+        event.data.nodeId === imageArrowModeNodeId &&
+        selectedSectionId &&
+        selectedSection?.editableNodes.some((node) => node.id === event.data.nodeId) &&
+        Number.isFinite(event.data.startX) &&
+        Number.isFinite(event.data.startY) &&
+        Number.isFinite(event.data.endX) &&
+        Number.isFinite(event.data.endY)
+      ) {
+        const nodeId = event.data.nodeId;
+        commit((current) =>
+          addImageArrowAnnotation(current, selectedSectionId, nodeId, {
+            startX: event.data.startX,
+            startY: event.data.startY,
+            endX: event.data.endX,
+            endY: event.data.endY
+          })
+        );
+        setImageArrowModeNodeId(undefined);
+        setMessage({ kind: 'status', text: '이미지 화살표 주석을 추가했습니다.' });
+        return;
+      }
+
+      if (
+        event.data.type === 'htmlpoint-image-arrow-rejected' &&
+        typeof event.data.nodeId === 'string' &&
+        event.data.nodeId === imageArrowModeNodeId
+      ) {
+        setImageArrowModeNodeId(undefined);
+        setMessage({ kind: 'error', text: '화살표는 프레임, 크롭, 회전이 없는 이미지에서만 그릴 수 있습니다.' });
+        return;
+      }
+
+      if (
         event.data.type === 'htmlpoint-resize-image' &&
         typeof event.data.nodeId === 'string' &&
         selectedSectionId &&
@@ -405,7 +442,7 @@ export function App(): JSX.Element {
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [commit, commitTextEdit, selectedNodeId, selectedNodeIds, selectedSection, selectedSectionId]);
+  }, [commit, commitTextEdit, imageArrowModeNodeId, selectedNodeId, selectedNodeIds, selectedSection, selectedSectionId]);
 
   useEffect(() => {
     if (!resizingProperties) {
@@ -1051,6 +1088,7 @@ export function App(): JSX.Element {
           selectedSectionId={selectedSectionId}
           selectedNodeId={selectedNodeId}
           selectedNodeIds={selectedNodeIds}
+          imageArrowModeNodeId={imageArrowModeNodeId}
           zoom={zoom}
           fitMode={fitMode}
           onFitZoomChange={setZoom}
@@ -1223,6 +1261,11 @@ export function App(): JSX.Element {
               commit((current) => addImageAnnotation(current, sectionId, nodeId, text, tone));
             }
           }}
+          onDrawImageArrow={(nodeId) => {
+            setImageArrowModeNodeId((current) => current === nodeId ? undefined : nodeId);
+            setMessage({ kind: 'status', text: '이미지 위에서 드래그하여 화살표를 그리세요.' });
+          }}
+          imageArrowArmed={imageArrowModeNodeId === effectiveSelectedNode?.id}
           onChartPresentation={(nodeId, settings: ChartPresentationSettings) => {
             const sectionId = requireSection();
             if (sectionId) {

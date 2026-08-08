@@ -20,5 +20,10 @@ describe('v1 plan achievement reporting', () => {
       status: 'complete',
       evidence: 'formatChangeOperation/ChangeSummaryTimeline'
     });
+
+    expect(v1PlanItems.find((item) => item.label === '화살표/박스/텍스트 주석')).toMatchObject({
+      status: 'complete',
+      evidence: 'addImageArrowAnnotation/htmlpoint-add-image-arrow; text/box annotation exists'
+    });
   });
 });

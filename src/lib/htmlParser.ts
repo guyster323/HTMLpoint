@@ -291,6 +291,9 @@ export function collectEditableNodes(
   });
 
   sectionElement.querySelectorAll<HTMLElement>('svg, canvas').forEach((element) => {
+    if (element.dataset.htmlpointImageArrow === 'true') {
+      return;
+    }
     const path = getElementPath(sectionElement, element);
     const id = makeNodeId(sectionId, path, 'chart');
     nodes.push({

@@ -45,6 +45,8 @@ interface PropertiesPanelProps {
   onResizeImageFrame: (nodeId: string, settings: ImageResizeSettings) => void;
   onCropImage: (nodeId: string, inset: number) => void;
   onImageAnnotation: (nodeId: string, text: string, tone: 'note' | 'warning' | 'box') => void;
+  onDrawImageArrow?: (nodeId: string) => void;
+  imageArrowArmed?: boolean;
   onChartPresentation: (nodeId: string, settings: ChartPresentationSettings) => void;
   onChartData: (nodeId: string, rows: ChartDataRow[]) => void;
 }
@@ -79,6 +81,8 @@ export function PropertiesPanel({
   onResizeImageFrame,
   onCropImage,
   onImageAnnotation,
+  onDrawImageArrow,
+  imageArrowArmed,
   onChartPresentation,
   onChartData
 }: PropertiesPanelProps): JSX.Element {
@@ -168,6 +172,8 @@ export function PropertiesPanel({
                     onResizeImageFrame={onResizeImageFrame}
                     onCropImage={onCropImage}
                     onImageAnnotation={onImageAnnotation}
+                    onDrawImageArrow={onDrawImageArrow ?? (() => undefined)}
+                    imageArrowArmed={imageArrowArmed}
                   />
                 )}
                 {activeTab === 'chart' && (
@@ -776,7 +782,9 @@ function ImageInspector({
   onResizeImage,
   onResizeImageFrame,
   onCropImage,
-  onImageAnnotation
+  onImageAnnotation,
+  onDrawImageArrow,
+  imageArrowArmed = false
 }: {
   node: EditableNode;
   onReplaceImage: (nodeId: string) => void;
@@ -785,6 +793,8 @@ function ImageInspector({
   onResizeImageFrame: (nodeId: string, settings: ImageResizeSettings) => void;
   onCropImage: (nodeId: string, inset: number) => void;
   onImageAnnotation: (nodeId: string, text: string, tone: 'note' | 'warning' | 'box') => void;
+  onDrawImageArrow: (nodeId: string) => void;
+  imageArrowArmed?: boolean;
 }): JSX.Element {
   const [settings, setSettings] = useState<ImageFilterSettings>({
     rotation: 0,
@@ -944,6 +954,14 @@ function ImageInspector({
       <Slider label="Crop" min={0} max={40} value={crop} onChange={setCrop} />
       <button type="button" className="secondary-button" onClick={() => onCropImage(node.id, crop)}>
         Apply Crop
+      </button>
+      <button
+        type="button"
+        className="secondary-button"
+        aria-pressed={imageArrowArmed}
+        onClick={() => onDrawImageArrow(node.id)}
+      >
+        {imageArrowArmed ? 'Cancel Arrow' : 'Draw Arrow'}
       </button>
       <label className="field">
         <span>Annotation</span>

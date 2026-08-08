@@ -24,6 +24,7 @@ interface CanvasProps {
   selectedSectionId?: string;
   selectedNodeId?: string;
   selectedNodeIds?: string[];
+  imageArrowModeNodeId?: string;
   zoom: number;
   fitMode?: boolean;
   onFitZoomChange?: (zoom: number) => void;
@@ -43,6 +44,7 @@ export function Canvas({
   selectedSectionId,
   selectedNodeId,
   selectedNodeIds = selectedNodeId ? [selectedNodeId] : [],
+  imageArrowModeNodeId,
   zoom,
   fitMode = false,
   onFitZoomChange,
@@ -168,9 +170,24 @@ export function Canvas({
     );
   }, [selectedNodeId, selectedNodeIds]);
 
+  const postImageArrowModeToPreview = useCallback(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      {
+        source: 'htmlpoint-editor',
+        type: 'htmlpoint-set-image-arrow-mode',
+        nodeId: imageArrowModeNodeId
+      },
+      '*'
+    );
+  }, [imageArrowModeNodeId]);
+
   useEffect(() => {
     postSelectionToPreview();
   }, [postSelectionToPreview]);
+
+  useEffect(() => {
+    postImageArrowModeToPreview();
+  }, [postImageArrowModeToPreview]);
 
   return (
     <main className="canvas-region">
@@ -205,6 +222,7 @@ export function Canvas({
                 srcDoc={previewHtml}
                 onLoad={() => {
                   postSelectionToPreview();
+                  postImageArrowModeToPreview();
                   if (previewHtml) onPreviewReady?.();
                 }}
               />

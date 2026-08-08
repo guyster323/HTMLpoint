@@ -20,6 +20,13 @@ import { parseHtml, parseSectionHtml } from './htmlParser';
 
 type SectionMutator = (sectionRoot: HTMLElement, node: Element) => boolean | void;
 
+export interface ImageArrowCoordinates {
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+}
+
 const EFFECT_ORIGINAL_STYLE_ATTRIBUTE = 'data-htmlpoint-effect-original-style';
 const EFFECT_ORIGINAL_STYLE_PRESENT_ATTRIBUTE =
   'data-htmlpoint-effect-original-style-present';
@@ -613,6 +620,14 @@ export function applyImageFilter(
 ): ReportDocument {
   return mutateNode(report, sectionId, nodeId, (_root, element) => {
     if (element instanceof HTMLElement) {
+      if (
+        element instanceof HTMLImageElement &&
+        imageAnnotationHostFor(element) &&
+        settings.rotation !== undefined &&
+        settings.rotation !== 0
+      ) {
+        return false;
+      }
       const filters = [
         settings.brightness !== undefined ? `brightness(${settings.brightness}%)` : '',
         settings.contrast !== undefined ? `contrast(${settings.contrast}%)` : '',
@@ -638,6 +653,9 @@ export function cropImage(
 ): ReportDocument {
   return mutateNode(report, sectionId, nodeId, (_root, element) => {
     if (element instanceof HTMLElement) {
+      if (element instanceof HTMLImageElement && imageAnnotationHostFor(element)) {
+        return false;
+      }
       const inset = Math.max(0, Math.min(45, insetPercent));
       const scale = inset >= 45 ? 10 : 1 / Math.max(0.1, 1 - (inset * 2) / 100);
       element.style.clipPath = `inset(${inset}% ${inset}% ${inset}% ${inset}%)`;
@@ -728,6 +746,106 @@ export function addImageAnnotation(
     );
     element.after(annotation);
   }, '이미지 주석 추가');
+}
+
+export function addImageArrowAnnotation(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId: string,
+  coordinates: ImageArrowCoordinates
+): ReportDocument {
+  if (!areValidImageArrowCoordinates(coordinates)) {
+    return report;
+  }
+
+  return mutateNode(report, sectionId, nodeId, (_root, element) => {
+    if (!(element instanceof HTMLImageElement) || !isImageArrowAnnotationSupported(element)) {
+      return false;
+    }
+
+    const host = imageAnnotationHostFor(element) ?? wrapImageForAnnotations(element);
+    host.appendChild(createImageArrowOverlay(element.ownerDocument, coordinates));
+  }, '이미지 화살표 주석 추가');
+}
+
+function areValidImageArrowCoordinates(coordinates: ImageArrowCoordinates): boolean {
+  const values = [coordinates.startX, coordinates.startY, coordinates.endX, coordinates.endY];
+  if (!values.every((value) => Number.isFinite(value) && value >= 0 && value <= 100)) {
+    return false;
+  }
+  return Math.hypot(coordinates.endX - coordinates.startX, coordinates.endY - coordinates.startY) >= 1;
+}
+
+function isImageArrowAnnotationSupported(image: HTMLImageElement): boolean {
+  const host = imageAnnotationHostFor(image);
+  const parent = image.parentElement;
+  const isBareImage = parent?.tagName.toLowerCase() === 'section' || parent?.tagName.toLowerCase() === 'header';
+  const cropped = image.style.clipPath || image.style.getPropertyValue('--htmlpoint-crop-scale').trim();
+  return Boolean((isBareImage || host) && !image.style.transform && !cropped);
+}
+
+function imageAnnotationHostFor(image: HTMLImageElement): HTMLSpanElement | undefined {
+  const parent = image.parentElement;
+  return parent instanceof HTMLSpanElement && parent.dataset.htmlpointImageAnnotationHost === 'true'
+    ? parent
+    : undefined;
+}
+
+function wrapImageForAnnotations(image: HTMLImageElement): HTMLSpanElement {
+  const host = image.ownerDocument.createElement('span');
+  host.className = 'htmlpoint-image-annotation-host';
+  host.dataset.htmlpointImageAnnotationHost = 'true';
+  host.setAttribute('style', 'position:relative;display:inline-block;vertical-align:top;line-height:0;');
+  image.replaceWith(host);
+  host.appendChild(image);
+  return host;
+}
+
+function createImageArrowOverlay(document: Document, coordinates: ImageArrowCoordinates): SVGSVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.dataset.htmlpointImageArrow = 'true';
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Arrow annotation');
+  svg.setAttribute('style', 'position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;');
+  svg.dataset.htmlpointArrowStartX = String(coordinates.startX);
+  svg.dataset.htmlpointArrowStartY = String(coordinates.startY);
+  svg.dataset.htmlpointArrowEndX = String(coordinates.endX);
+  svg.dataset.htmlpointArrowEndY = String(coordinates.endY);
+
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('x1', String(coordinates.startX));
+  line.setAttribute('y1', String(coordinates.startY));
+  line.setAttribute('x2', String(coordinates.endX));
+  line.setAttribute('y2', String(coordinates.endY));
+  line.setAttribute('stroke', '#e53935');
+  line.setAttribute('stroke-width', '1.2');
+  line.setAttribute('vector-effect', 'non-scaling-stroke');
+
+  const head = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  head.setAttribute('points', imageArrowHeadPoints(coordinates));
+  head.setAttribute('fill', '#e53935');
+  head.setAttribute('vector-effect', 'non-scaling-stroke');
+  svg.append(line, head);
+  return svg;
+}
+
+function imageArrowHeadPoints(coordinates: ImageArrowCoordinates): string {
+  const deltaX = coordinates.endX - coordinates.startX;
+  const deltaY = coordinates.endY - coordinates.startY;
+  const length = Math.hypot(deltaX, deltaY);
+  const unitX = deltaX / length;
+  const unitY = deltaY / length;
+  const baseX = coordinates.endX - unitX * 5;
+  const baseY = coordinates.endY - unitY * 5;
+  const perpendicularX = -unitY * 2.7;
+  const perpendicularY = unitX * 2.7;
+  return [
+    `${coordinates.endX},${coordinates.endY}`,
+    `${baseX + perpendicularX},${baseY + perpendicularY}`,
+    `${baseX - perpendicularX},${baseY - perpendicularY}`
+  ].join(' ');
 }
 
 export function insertTableAfterNode(
@@ -1310,6 +1428,9 @@ function applyTextStyleToElement(element: HTMLElement, settings: TextStyleSettin
 function getImageFrameElement(element: HTMLElement): HTMLElement | null {
   const parent = element.parentElement;
   if (!parent || parent.tagName.toLowerCase() === 'section' || parent.tagName.toLowerCase() === 'header') {
+    return null;
+  }
+  if (parent.dataset.htmlpointImageAnnotationHost === 'true') {
     return null;
   }
   if (parent.children.length > 3) {

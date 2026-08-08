@@ -107,6 +107,9 @@ const PREVIEW_SELECTION_CSS = `
     background: rgba(223, 246, 221, .72) !important;
     cursor: text !important;
   }
+  .htmlpoint-image-arrow-ready {
+    cursor: crosshair !important;
+  }
 `;
 
 export function buildPreviewSelectionPayload(
@@ -146,6 +149,7 @@ export function buildPreviewHtml(
   const htmlpointNodes = ${JSON.stringify(nodes)};
   let selectedNodeId = ${JSON.stringify(selectedNodeId ?? '')};
   let selectedNodeIds = new Set(${JSON.stringify(initialSelectedNodeIds)});
+  let imageArrowModeNodeId = '';
   let marquee = null;
 
   function elementByPath(root, path) {
@@ -155,6 +159,7 @@ export function buildPreviewHtml(
   function getImageFrameElement(element) {
     const parent = element && element.parentElement;
     if (!parent || !parent.tagName || ['section', 'header'].includes(parent.tagName.toLowerCase())) return null;
+    if (parent.dataset && parent.dataset.htmlpointImageAnnotationHost === 'true') return null;
     if (parent.children && parent.children.length > 3) return null;
     return parent;
   }
@@ -516,12 +521,115 @@ export function buildPreviewHtml(
     postSelectionMessage('htmlpoint-select-node', selectedNodeId, { previewSync: true });
   }
 
+  function isImageArrowEligible(element) {
+    if (!(element instanceof HTMLImageElement)) return false;
+    const parent = element.parentElement;
+    const bare = parent && ['section', 'header'].includes(parent.tagName.toLowerCase());
+    const generatedHost = parent && parent.dataset && parent.dataset.htmlpointImageAnnotationHost === 'true';
+    return Boolean((bare || generatedHost) && !element.style.transform && !element.style.clipPath && !element.style.getPropertyValue('--htmlpoint-crop-scale').trim());
+  }
+
+  function updateImageArrowMode() {
+    htmlpointNodes.forEach((node) => {
+      const { target } = nodeElement(node.id);
+      if (target instanceof HTMLImageElement) {
+        target.classList.toggle('htmlpoint-image-arrow-ready', node.id === imageArrowModeNodeId);
+      }
+    });
+  }
+
+  function createTransientArrow(rect, startX, startY) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + rect.width + ' ' + rect.height);
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('style', 'position:fixed;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;overflow:visible;pointer-events:none;z-index:2147483647;');
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', String(startX));
+    line.setAttribute('y1', String(startY));
+    line.setAttribute('x2', String(startX));
+    line.setAttribute('y2', String(startY));
+    line.setAttribute('stroke', '#e53935');
+    line.setAttribute('stroke-width', '3');
+    svg.appendChild(line);
+    document.documentElement.appendChild(svg);
+    return { svg, line };
+  }
+
+  function normalizedArrowPosition(event, rect) {
+    return {
+      x: Math.max(0, Math.min(100, Number((((event.clientX - rect.left) / rect.width) * 100).toFixed(3)))),
+      y: Math.max(0, Math.min(100, Number((((event.clientY - rect.top) / rect.height) * 100).toFixed(3))))
+    };
+  }
+
+  function addImageArrowDrawing(element, node) {
+    if (!(element instanceof HTMLImageElement)) return;
+    element.addEventListener('pointerdown', (event) => {
+      if (imageArrowModeNodeId !== node.id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!isImageArrowEligible(element)) {
+        imageArrowModeNodeId = '';
+        updateImageArrowMode();
+        window.parent.postMessage({
+          source: 'htmlpoint-preview',
+          type: 'htmlpoint-image-arrow-rejected',
+          nodeId: node.id
+        }, '*');
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) return;
+      const start = normalizedArrowPosition(event, rect);
+      const transient = createTransientArrow(rect, event.clientX - rect.left, event.clientY - rect.top);
+      const pointerId = event.pointerId;
+      try {
+        element.setPointerCapture(pointerId);
+      } catch (_error) {
+        // Fall back to iframe window listeners when pointer capture is unavailable.
+      }
+      const update = (moveEvent) => {
+        transient.line.setAttribute('x2', String(moveEvent.clientX - rect.left));
+        transient.line.setAttribute('y2', String(moveEvent.clientY - rect.top));
+      };
+      const finish = (finishEvent) => {
+        const end = normalizedArrowPosition(finishEvent, rect);
+        transient.svg.remove();
+        window.removeEventListener('pointermove', update);
+        window.removeEventListener('pointerup', finish);
+        try {
+          element.releasePointerCapture(pointerId);
+        } catch (_error) {
+          // Ignore release failures after the iframe fallback path.
+        }
+        imageArrowModeNodeId = '';
+        updateImageArrowMode();
+        window.parent.postMessage({
+          source: 'htmlpoint-preview',
+          type: 'htmlpoint-add-image-arrow',
+          nodeId: node.id,
+          startX: start.x,
+          startY: start.y,
+          endX: end.x,
+          endY: end.y
+        }, '*');
+      };
+      window.addEventListener('pointermove', update);
+      window.addEventListener('pointerup', finish, { once: true });
+    });
+  }
+
   window.addEventListener('message', (event) => {
     const data = event.data || {};
-    if (data.source !== 'htmlpoint-editor' || data.type !== 'htmlpoint-set-selection') {
+    if (data.source !== 'htmlpoint-editor') return;
+    if (data.type === 'htmlpoint-set-selection') {
+      applyEditorSelection(data.selectedNodeId, data.selectedNodeIds);
       return;
     }
-    applyEditorSelection(data.selectedNodeId, data.selectedNodeIds);
+    if (data.type === 'htmlpoint-set-image-arrow-mode') {
+      imageArrowModeNodeId = typeof data.nodeId === 'string' ? data.nodeId : '';
+      updateImageArrowMode();
+    }
   });
 
   function rectsIntersect(left, right) {
@@ -600,8 +708,12 @@ export function buildPreviewHtml(
             selectNode(node.id, true, event.ctrlKey || event.metaKey);
           });
           element.addEventListener('dblclick', (event) => beginInlineTextEdit(element, node, event));
+          if (node.kind === 'image') {
+            addImageArrowDrawing(element, node);
+          }
         }
       });
+      updateImageArrowMode();
       if (selectedNodeId || selectedNodeIds.size) {
         paintSelections();
         if (selectedNodeId) {
