@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import React, { act } from 'react';
 import type { ComponentProps } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -208,6 +208,8 @@ describe('interactive UI behavior helpers', () => {
         onMove: () => undefined,
         onTableAddRow: () => undefined,
         onTableAddColumn: () => undefined,
+        onTableDeleteRow: () => undefined,
+        onTableDeleteColumn: () => undefined,
         onTableSort: () => undefined,
         onImageReplace: () => undefined,
         onImageCrop: () => undefined,
@@ -427,6 +429,45 @@ describe('interactive UI behavior helpers', () => {
     }
   });
 
+  it('dispatches row and column deletion from the table Ribbon and inspector at the selected coordinates', () => {
+    const report = makeUiReport();
+    const table = report.sections[0].editableNodes.find((node) => node.kind === 'table')!;
+    const onRibbonDeleteRow = vi.fn();
+    const onRibbonDeleteColumn = vi.fn();
+    const onInspectorDeleteRow = vi.fn();
+    const onInspectorDeleteColumn = vi.fn();
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+
+    try {
+      act(() => root.render(React.createElement(Ribbon, ribbonProps(report, {
+        activeTab: 'Table',
+        selectedKind: 'table',
+        onTableDeleteRow: onRibbonDeleteRow,
+        onTableDeleteColumn: onRibbonDeleteColumn
+      }))));
+      act(() => buttonWithText(container, '- Row').click());
+      act(() => buttonWithText(container, '- Column').click());
+      expect(onRibbonDeleteRow).toHaveBeenCalledTimes(1);
+      expect(onRibbonDeleteColumn).toHaveBeenCalledTimes(1);
+
+      act(() => root.render(React.createElement(PropertiesPanel, {
+        ...propertiesProps(report, table.id, [table.id]),
+        selectedCell: { row: 0, cell: 0 },
+        onDeleteTableRow: onInspectorDeleteRow,
+        onDeleteTableColumn: onInspectorDeleteColumn
+      })));
+      act(() => buttonWithText(container, '- Row').click());
+      act(() => buttonWithText(container, '- Column').click());
+      expect(onInspectorDeleteRow).toHaveBeenCalledWith(table.id, 0);
+      expect(onInspectorDeleteColumn).toHaveBeenCalledWith(table.id, 0);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
   it('renders ordinary output as polite status and explicit errors as alerts', () => {
     const harness = renderAppHarness();
 
@@ -513,6 +554,8 @@ function ribbonProps(
     onMove: () => undefined,
     onTableAddRow: () => undefined,
     onTableAddColumn: () => undefined,
+    onTableDeleteRow: () => undefined,
+    onTableDeleteColumn: () => undefined,
     onTableSort: () => undefined,
     onImageReplace: () => undefined,
     onImageCrop: () => undefined,
@@ -542,6 +585,8 @@ function propertiesProps(
     onTableCellText: () => undefined,
     onAddTableRow: () => undefined,
     onAddTableColumn: () => undefined,
+    onDeleteTableRow: () => undefined,
+    onDeleteTableColumn: () => undefined,
     onSortTable: () => undefined,
     onFilterTable: () => undefined,
     onMergeRight: () => undefined,

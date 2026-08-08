@@ -726,6 +726,8 @@ function propertiesProps(
     onTableCellText: () => undefined,
     onAddTableRow: () => undefined,
     onAddTableColumn: () => undefined,
+    onDeleteTableRow: () => undefined,
+    onDeleteTableColumn: () => undefined,
     onSortTable: () => undefined,
     onFilterTable: () => undefined,
     onMergeRight: () => undefined,

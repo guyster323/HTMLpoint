@@ -9,6 +9,8 @@ import {
   applyImageFilter,
   cropImage,
   deleteSection,
+  deleteTableColumn,
+  deleteTableRow,
   duplicateSection,
   editTextNodeWithOutcome,
   filterTableRows,
@@ -52,7 +54,8 @@ import {
 import {
   editorSessionReducer,
   emptyEditorSession,
-  selectionAfterSectionDelete
+  selectionAfterSectionDelete,
+  selectionAfterTableMutation
 } from './lib/editorSession';
 import type {
   EditorSelection,
@@ -126,8 +129,11 @@ export function App(): JSX.Element {
   const selectedNodeIds = selection.nodeIds;
   const selectedCell = selection.cell;
 
-  const commit = useCallback((updater: (current: ReportDocument) => ReportDocument) => {
-    dispatchEditorSession({ type: 'commit', updateReport: updater });
+  const commit = useCallback((
+    updater: (current: ReportDocument) => ReportDocument,
+    updateSelection?: (context: EditorSelectionTransitionContext) => EditorSelection
+  ) => {
+    dispatchEditorSession({ type: 'commit', updateReport: updater, updateSelection });
   }, []);
 
   const commitInsertion = useCallback((
@@ -943,6 +949,32 @@ export function App(): JSX.Element {
             commit((current) => addTableColumn(current, sectionId, nodeId, selectedCell.cell + 1));
           }
         }}
+        onTableDeleteRow={() => {
+          const sectionId = requireSection();
+          const nodeId = requireNode();
+          if (sectionId && nodeId) {
+            commit(
+              (current) => deleteTableRow(current, sectionId, nodeId, selectedCell.row),
+              ({ current, nextReport, previousReport }) =>
+                nextReport === previousReport
+                  ? current
+                  : selectionAfterTableMutation(nextReport, sectionId, nodeId, current)
+            );
+          }
+        }}
+        onTableDeleteColumn={() => {
+          const sectionId = requireSection();
+          const nodeId = requireNode();
+          if (sectionId && nodeId) {
+            commit(
+              (current) => deleteTableColumn(current, sectionId, nodeId, selectedCell.cell),
+              ({ current, nextReport, previousReport }) =>
+                nextReport === previousReport
+                  ? current
+                  : selectionAfterTableMutation(nextReport, sectionId, nodeId, current)
+            );
+          }
+        }}
         onTableSort={(direction) => {
           const sectionId = requireSection();
           const nodeId = requireNode();
@@ -1091,6 +1123,30 @@ export function App(): JSX.Element {
             const sectionId = requireSection();
             if (sectionId) {
               commit((current) => addTableColumn(current, sectionId, nodeId, column));
+            }
+          }}
+          onDeleteTableRow={(nodeId, row) => {
+            const sectionId = requireSection();
+            if (sectionId) {
+              commit(
+                (current) => deleteTableRow(current, sectionId, nodeId, row),
+                ({ current, nextReport, previousReport }) =>
+                  nextReport === previousReport
+                    ? current
+                    : selectionAfterTableMutation(nextReport, sectionId, nodeId, current)
+              );
+            }
+          }}
+          onDeleteTableColumn={(nodeId, column) => {
+            const sectionId = requireSection();
+            if (sectionId) {
+              commit(
+                (current) => deleteTableColumn(current, sectionId, nodeId, column),
+                ({ current, nextReport, previousReport }) =>
+                  nextReport === previousReport
+                    ? current
+                    : selectionAfterTableMutation(nextReport, sectionId, nodeId, current)
+              );
             }
           }}
           onSortTable={(nodeId, column, direction) => {

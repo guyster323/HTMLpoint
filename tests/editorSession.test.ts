@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { deleteSection } from '../src/lib/editing';
+import { deleteSection, deleteTableRow } from '../src/lib/editing';
 import {
   editorSessionReducer,
   emptyEditorSession,
   emptySelection,
   normalizeSelection,
+  selectionAfterTableMutation,
   selectionAfterSectionDelete
 } from '../src/lib/editorSession';
 import type { EditorSelection, EditorSessionState } from '../src/lib/editorSession';
@@ -168,6 +169,46 @@ describe('editor session selection', () => {
     state = editorSessionReducer(state, { type: 'redo' });
     expect(state.report).toBe(reportAfterDelete);
     expect(state.selection).toBe(selectionAfterDelete);
+  });
+
+  it('clamps a deleted final table row selection and restores both snapshots through undo and redo', () => {
+    const report = parseReportHtml(`<!doctype html><html><body><main>
+      <section><table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table></section>
+    </main></body></html>`);
+    const section = report.sections[0];
+    const table = section.editableNodes.find((node) => node.kind === 'table')!;
+    const initialSelection: EditorSelection = {
+      sectionId: section.id,
+      nodeId: table.id,
+      nodeIds: [table.id],
+      cell: { row: 1, cell: 1 }
+    };
+    let state: EditorSessionState = {
+      ...emptyEditorSession(),
+      report,
+      selection: initialSelection
+    };
+
+    state = editorSessionReducer(state, {
+      type: 'commit',
+      updateReport: (current) => deleteTableRow(current, section.id, table.id, 1),
+      updateSelection: ({ current, nextReport, previousReport }) =>
+        nextReport === previousReport
+          ? current
+          : selectionAfterTableMutation(nextReport, section.id, table.id, current)
+    });
+    const afterDelete = state.report!;
+
+    expect(state.selection.cell).toEqual({ row: 0, cell: 1 });
+    expect(state.past).toEqual([{ report, selection: initialSelection }]);
+
+    state = editorSessionReducer(state, { type: 'undo' });
+    expect(state.report).toBe(report);
+    expect(state.selection).toBe(initialSelection);
+
+    state = editorSessionReducer(state, { type: 'redo' });
+    expect(state.report).toBe(afterDelete);
+    expect(state.selection.cell).toEqual({ row: 0, cell: 1 });
   });
 
   it('preserves the Save As checkpoint path and dirty state through undo and redo', () => {

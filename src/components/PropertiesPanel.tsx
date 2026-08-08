@@ -31,6 +31,8 @@ interface PropertiesPanelProps {
   onTableCellText: (nodeId: string, row: number, cell: number, text: string) => void;
   onAddTableRow: (nodeId: string, row: number) => void;
   onAddTableColumn: (nodeId: string, column: number) => void;
+  onDeleteTableRow: (nodeId: string, row: number) => void;
+  onDeleteTableColumn: (nodeId: string, column: number) => void;
   onSortTable: (nodeId: string, column: number, direction: 'asc' | 'desc') => void;
   onFilterTable: (nodeId: string, query: string) => void;
   onMergeRight: (nodeId: string, row: number, cell: number) => void;
@@ -63,6 +65,8 @@ export function PropertiesPanel({
   onTableCellText,
   onAddTableRow,
   onAddTableColumn,
+  onDeleteTableRow,
+  onDeleteTableColumn,
   onSortTable,
   onFilterTable,
   onMergeRight,
@@ -145,6 +149,8 @@ export function PropertiesPanel({
                     onTableCellText={onTableCellText}
                     onAddTableRow={onAddTableRow}
                     onAddTableColumn={onAddTableColumn}
+                    onDeleteTableRow={onDeleteTableRow}
+                    onDeleteTableColumn={onDeleteTableColumn}
                     onSortTable={onSortTable}
                     onFilterTable={onFilterTable}
                     onMergeRight={onMergeRight}
@@ -581,6 +587,8 @@ function TableInspector({
   onTableCellText,
   onAddTableRow,
   onAddTableColumn,
+  onDeleteTableRow,
+  onDeleteTableColumn,
   onSortTable,
   onFilterTable,
   onMergeRight,
@@ -594,6 +602,8 @@ function TableInspector({
   onTableCellText: (nodeId: string, row: number, cell: number, text: string) => void;
   onAddTableRow: (nodeId: string, row: number) => void;
   onAddTableColumn: (nodeId: string, column: number) => void;
+  onDeleteTableRow: (nodeId: string, row: number) => void;
+  onDeleteTableColumn: (nodeId: string, column: number) => void;
   onSortTable: (nodeId: string, column: number, direction: 'asc' | 'desc') => void;
   onFilterTable: (nodeId: string, query: string) => void;
   onMergeRight: (nodeId: string, row: number, cell: number) => void;
@@ -680,6 +690,8 @@ function TableInspector({
       <div className="button-row">
         <button type="button" onClick={() => onAddTableRow(node.id, selectedCell.row)}>+ Row</button>
         <button type="button" onClick={() => onAddTableColumn(node.id, selectedCell.cell + 1)}>+ Column</button>
+        <button type="button" onClick={() => onDeleteTableRow(node.id, selectedCell.row)}>- Row</button>
+        <button type="button" onClick={() => onDeleteTableColumn(node.id, selectedCell.cell)}>- Column</button>
       </div>
       <div className="button-row">
         <button type="button" onClick={() => onSortTable(node.id, selectedCell.cell, 'asc')}>Sort ↑</button>

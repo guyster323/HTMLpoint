@@ -56,6 +56,8 @@ interface RibbonProps {
   onMove: (delta: -1 | 1) => void;
   onTableAddRow: () => void;
   onTableAddColumn: () => void;
+  onTableDeleteRow: () => void;
+  onTableDeleteColumn: () => void;
   onTableSort: (direction: 'asc' | 'desc') => void;
   onImageReplace: () => void;
   onImageCrop: () => void;
@@ -118,6 +120,8 @@ export function Ribbon({
   onMove,
   onTableAddRow,
   onTableAddColumn,
+  onTableDeleteRow,
+  onTableDeleteColumn,
   onTableSort,
   onImageReplace,
   onImageCrop,
@@ -280,6 +284,8 @@ export function Ribbon({
             <RibbonGroup title="Table Tools">
               <button className="compact-tool" type="button" onClick={onTableAddRow} disabled={!isTable} {...tooltipProps('Add row')}>+ Row</button>
               <button className="compact-tool" type="button" onClick={onTableAddColumn} disabled={!isTable} {...tooltipProps('Add column')}>+ Column</button>
+              <button className="compact-tool" type="button" onClick={onTableDeleteRow} disabled={!isTable} {...tooltipProps('Delete row')}>- Row</button>
+              <button className="compact-tool" type="button" onClick={onTableDeleteColumn} disabled={!isTable} {...tooltipProps('Delete column')}>- Column</button>
             </RibbonGroup>
             <RibbonGroup title="Cell">
               <button className="compact-tool" type="button" onClick={() => onTableSort('asc')} disabled={!isTable} {...tooltipProps('Sort ascending')}>Sort Up</button>

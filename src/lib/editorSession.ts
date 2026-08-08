@@ -357,6 +357,33 @@ export function selectionAfterSectionDelete(
   };
 }
 
+export function selectionAfterTableMutation(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId: string,
+  current: EditorSelection
+): EditorSelection {
+  const node = report.sections
+    .find((section) => section.id === sectionId)
+    ?.editableNodes.find((candidate) => candidate.id === nodeId);
+  const rows = node?.table?.rows;
+  if (!rows?.length) {
+    return current;
+  }
+  const row = Math.min(Math.max(0, current.cell.row), rows.length - 1);
+  const cells = rows[row];
+  if (!cells?.length) {
+    return current;
+  }
+  return {
+    ...current,
+    cell: {
+      row,
+      cell: Math.min(Math.max(0, current.cell.cell), cells.length - 1)
+    }
+  };
+}
+
 function hasNode(section: ReportSection, nodeId: string): boolean {
   return section.editableNodes.some((node) => node.id === nodeId);
 }
