@@ -10,5 +10,10 @@ describe('v1 plan achievement reporting', () => {
     expect(report.percent).toBeGreaterThan(60);
     expect(report.remaining.map((item) => item.label)).toContain('PDF 직접 export 제외');
     expect(report.byMilestone.some((milestone) => milestone.name === 'Milestone 5')).toBe(true);
+
+    expect(v1PlanItems.find((item) => item.label === '행/열 삭제')).toMatchObject({
+      status: 'complete',
+      evidence: 'deleteTableRow/deleteTableColumn'
+    });
   });
 });

@@ -42,7 +42,7 @@ export const v1PlanItems: PlanItem[] = [
   { milestone: 'Milestone 3', label: '표 셀 수정', status: 'complete', evidence: 'setTableCellText' },
   { milestone: 'Milestone 3', label: 'Excel 붙여넣기', status: 'complete', evidence: 'importTabDelimitedTable' },
   { milestone: 'Milestone 3', label: '행/열 삽입', status: 'complete', evidence: 'addTableRow/addTableColumn' },
-  { milestone: 'Milestone 3', label: '행/열 삭제', status: 'pending', evidence: 'not implemented in UI/model yet' },
+  { milestone: 'Milestone 3', label: '행/열 삭제', status: 'complete', evidence: 'deleteTableRow/deleteTableColumn' },
   { milestone: 'Milestone 3', label: '셀 병합/해제', status: 'complete', evidence: 'mergeTableCellRight/unmergeTableCell' },
   { milestone: 'Milestone 3', label: '정렬/필터', status: 'complete', evidence: 'sortTableByColumn/filterTableRows' },
   { milestone: 'Milestone 3', label: '배경색/강조/테두리/정렬', status: 'complete', evidence: 'styleTableCell' },
