@@ -47,7 +47,7 @@ import {
 } from './lib/documentActions';
 import type { PendingDocumentAction } from './lib/documentActions';
 import { clampPropertiesWidth } from './lib/uiSizing';
-import { formatChangeOperation } from './lib/changeSummary';
+import { buildChangeSummaryEntries } from './lib/changeSummary';
 import {
   shouldApplyPreviewSelectionState,
   shouldStorePreviewSnapshot
@@ -130,9 +130,11 @@ export function App(): JSX.Element {
   const selectedNodeId = selection.nodeId;
   const selectedNodeIds = selection.nodeIds;
   const selectedCell = selection.cell;
-  const changeSummaryEntries = report?.operations.map((operation) =>
-    formatChangeOperation(operation, report.sections)
-  ) ?? [];
+  const changeSummaryOpen = showChangeSummary && !pendingDocumentAction;
+  const changeSummaryEntries = useMemo(
+    () => buildChangeSummaryEntries(changeSummaryOpen, report),
+    [changeSummaryOpen, report]
+  );
 
   const commit = useCallback((
     updater: (current: ReportDocument) => ReportDocument,
@@ -1326,7 +1328,7 @@ export function App(): JSX.Element {
         )}
       </Modal>
       <Modal
-        open={showChangeSummary && !pendingDocumentAction}
+        open={changeSummaryOpen}
         title="변경 요약"
         description={`${report?.operations.length ?? 0} operations in current document`}
         initialFocusRef={changeSummaryCloseButtonRef}

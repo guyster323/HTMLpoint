@@ -10,6 +10,16 @@ export interface ChangeSummaryEntry {
   after?: string;
 }
 
+interface ChangeSummarySource {
+  operations: EditOperation[];
+  sections: ReportSection[];
+}
+
+type ChangeOperationFormatter = (
+  operation: EditOperation,
+  sections: ReportSection[]
+) => ChangeSummaryEntry;
+
 const CATEGORY_BY_OPERATION_TYPE: Record<EditOperation['type'], string> = {
   text: '텍스트',
   translation: '번역',
@@ -38,18 +48,33 @@ export function formatChangeOperation(
   };
 }
 
+export function buildChangeSummaryEntries(
+  open: boolean,
+  report: ChangeSummarySource | null | undefined,
+  formatter: ChangeOperationFormatter = formatChangeOperation
+): ChangeSummaryEntry[] {
+  if (!open || !report) {
+    return [];
+  }
+
+  return report.operations.map((operation) => formatter(operation, report.sections));
+}
+
 function formatExcerpt(payload: string | undefined): string | undefined {
   if (!payload) {
     return undefined;
   }
 
-  const container = document.createElement('div');
-  container.innerHTML = payload;
-  const text = container.textContent?.replace(/\s+/g, ' ').trim();
+  const parsed = new DOMParser().parseFromString(payload, 'text/html');
+  parsed
+    .querySelectorAll('script, style, template, noscript, iframe, object, embed')
+    .forEach((element) => element.remove());
+  const text = parsed.body.textContent?.replace(/\s+/g, ' ').trim();
 
   if (!text) {
     return undefined;
   }
 
-  return text.length > 240 ? `${text.slice(0, 240)}…` : text;
+  const codePoints = Array.from(text);
+  return codePoints.length > 240 ? `${codePoints.slice(0, 240).join('')}…` : text;
 }
