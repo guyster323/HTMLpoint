@@ -343,12 +343,13 @@ export function deleteTableColumn(
 ): ReportDocument {
   return mutateTable(report, sectionId, nodeId, (table) => {
     const rows = Array.from(table.rows);
+    const cellCount = rows[0]?.cells.length;
     if (
-      !rows.length ||
+      !cellCount ||
       rows.some(
         (row) =>
-          row.cells.length <= 1 ||
-          Array.from(row.cells).some((cell) => cell.colSpan > 1 || cell.rowSpan > 1)
+          row.cells.length !== cellCount ||
+          Array.from(row.cells).some((cell) => cell.colSpan !== 1 || cell.rowSpan !== 1)
       )
     ) {
       return false;

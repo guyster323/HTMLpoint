@@ -53,6 +53,39 @@ describe('table stabilization', () => {
     expect(deleteTableColumn(report, section.id, table.id, 1)).toBe(report);
   });
 
+  it.each([
+    [
+      'a two-cell row before a three-cell row',
+      '<tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td><td>E</td></tr></tbody>'
+    ],
+    [
+      'a three-cell row before a two-cell row',
+      '<tbody><tr><td>A</td><td>B</td><td>C</td></tr><tr><td>D</td><td>E</td></tr></tbody>'
+    ]
+  ])('rejects a column delete for a ragged table with %s', (_description, html) => {
+    const report = reportWithTableHtml(html);
+    const { section, table } = tableIdentity(report);
+    const operationCount = report.operations.length;
+
+    const updated = deleteTableColumn(report, section.id, table.id, 1);
+
+    expect(updated).toBe(report);
+    expect(updated.operations).toHaveLength(operationCount);
+  });
+
+  it('rejects a column delete for an effective rowspan zero', () => {
+    const report = reportWithTableHtml(
+      '<tbody><tr><td rowspan="0">Merged</td><td>A</td></tr><tr><td>B</td><td>C</td></tr></tbody>'
+    );
+    const { section, table } = tableIdentity(report);
+    const operationCount = report.operations.length;
+
+    const updated = deleteTableColumn(report, section.id, table.id, 1);
+
+    expect(updated).toBe(report);
+    expect(updated.operations).toHaveLength(operationCount);
+  });
+
   it('returns the original report when deleting its final row', () => {
     const report = reportWithTableHtml('<tbody><tr><td>Only</td></tr></tbody>');
     const { section, table } = tableIdentity(report);
