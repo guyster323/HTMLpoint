@@ -4,6 +4,7 @@ import type { ComponentProps } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { App } from '../src/App';
+import { ChangeSummaryTimeline } from '../src/components/ChangeSummaryTimeline';
 import { PropertiesPanel } from '../src/components/PropertiesPanel';
 import { Ribbon } from '../src/components/Ribbon';
 import { StatusBar } from '../src/components/StatusBar';
@@ -485,6 +486,37 @@ describe('interactive UI behavior helpers', () => {
     }
   });
 
+  it('renders change entries newest first and only discloses meaningful text excerpts', () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(ChangeSummaryTimeline, {
+        entries: [
+          {
+            id: 'older',
+            category: '텍스트',
+            label: 'Older change',
+            timestamp: '2026. 8. 8. 오전 9:00',
+            sectionTitle: 'Background'
+          },
+          {
+            id: 'newer',
+            category: '이미지',
+            label: 'Newer change',
+            timestamp: '2026. 8. 8. 오전 10:00',
+            before: 'Before safe excerpt',
+            after: 'After safe excerpt'
+          }
+        ]
+      })
+    );
+
+    expect(markup).toContain('<ol class="change-summary-timeline" aria-label="변경 이력">');
+    expect(markup.indexOf('Newer change')).toBeLessThan(markup.indexOf('Older change'));
+    expect(markup).toContain('변경 전후 보기');
+    expect(markup).toContain('Before safe excerpt');
+    expect(markup).toContain('After safe excerpt');
+    expect(markup.match(/<details/g)).toHaveLength(1);
+  });
+
   it('moves focus into Summary, closes on Escape, and restores the Summary button', async () => {
     const harness = renderAppHarness();
 
@@ -500,6 +532,7 @@ describe('interactive UI behavior helpers', () => {
       const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
       const labelledBy = dialog?.getAttribute('aria-labelledby');
       expect(labelledBy ? document.getElementById(labelledBy)?.textContent : '').toBe('변경 요약');
+      expect(dialog?.textContent).toContain('아직 변경 내역이 없습니다.');
       expect(document.activeElement?.textContent).toBe('Close');
 
       act(() => {

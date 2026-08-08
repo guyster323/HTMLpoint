@@ -47,6 +47,7 @@ import {
 } from './lib/documentActions';
 import type { PendingDocumentAction } from './lib/documentActions';
 import { clampPropertiesWidth } from './lib/uiSizing';
+import { formatChangeOperation } from './lib/changeSummary';
 import {
   shouldApplyPreviewSelectionState,
   shouldStorePreviewSnapshot
@@ -63,6 +64,7 @@ import type {
   EditorSelectionUpdater
 } from './lib/editorSession';
 import { Canvas } from './components/Canvas';
+import { ChangeSummaryTimeline } from './components/ChangeSummaryTimeline';
 import { Modal } from './components/Modal';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Ribbon } from './components/Ribbon';
@@ -128,6 +130,9 @@ export function App(): JSX.Element {
   const selectedNodeId = selection.nodeId;
   const selectedNodeIds = selection.nodeIds;
   const selectedCell = selection.cell;
+  const changeSummaryEntries = report?.operations.map((operation) =>
+    formatChangeOperation(operation, report.sections)
+  ) ?? [];
 
   const commit = useCallback((
     updater: (current: ReportDocument) => ReportDocument,
@@ -1327,16 +1332,7 @@ export function App(): JSX.Element {
         initialFocusRef={changeSummaryCloseButtonRef}
         onEscape={() => setShowChangeSummary(false)}
       >
-        <div className="plan-remaining">
-          <strong>Operations</strong>
-          {(report?.operations.length ? report.operations.slice(-20).reverse() : []).map((operation) => (
-            <div key={operation.id}>
-              <span>{operation.type.toUpperCase()}</span>
-              {operation.label}
-            </div>
-          ))}
-          {!report?.operations.length && <div><span>NONE</span>아직 변경 내역이 없습니다.</div>}
-        </div>
+        <ChangeSummaryTimeline entries={changeSummaryEntries} />
         <div className="modal-actions">
           <button
             ref={changeSummaryCloseButtonRef}
