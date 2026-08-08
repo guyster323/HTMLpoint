@@ -15,5 +15,10 @@ describe('v1 plan achievement reporting', () => {
       status: 'complete',
       evidence: 'deleteTableRow/deleteTableColumn'
     });
+
+    expect(v1PlanItems.find((item) => item.label === '변경 요약')).toMatchObject({
+      status: 'complete',
+      evidence: 'formatChangeOperation/ChangeSummaryTimeline'
+    });
   });
 });

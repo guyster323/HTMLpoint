@@ -37,7 +37,7 @@ export const v1PlanItems: PlanItem[] = [
   { milestone: 'Milestone 2', label: '텍스트/제목/목록 편집', status: 'complete', evidence: 'editTextNode, PropertiesPanel' },
   { milestone: 'Milestone 2', label: '섹션 복제/삭제/숨김/순서 변경', status: 'complete', evidence: 'duplicate/delete/hide/move operations' },
   { milestone: 'Milestone 2', label: 'Undo/Redo', status: 'complete', evidence: 'App past/future state' },
-  { milestone: 'Milestone 2', label: '변경 요약', status: 'partial', evidence: 'status dirty state and operations list; detailed modal remains next phase' },
+  { milestone: 'Milestone 2', label: '변경 요약', status: 'complete', evidence: 'formatChangeOperation/ChangeSummaryTimeline' },
   { milestone: 'Milestone 2', label: '단일 HTML Save As', status: 'complete', evidence: 'serializeReportHtml and save-as IPC' },
   { milestone: 'Milestone 3', label: '표 셀 수정', status: 'complete', evidence: 'setTableCellText' },
   { milestone: 'Milestone 3', label: 'Excel 붙여넣기', status: 'complete', evidence: 'importTabDelimitedTable' },
