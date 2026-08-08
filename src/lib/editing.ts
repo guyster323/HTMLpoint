@@ -307,6 +307,65 @@ export function addTableRow(
   }, '표 행 추가');
 }
 
+export function deleteTableRow(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId: string,
+  rowIndex: number
+): ReportDocument {
+  return mutateTable(report, sectionId, nodeId, (table) => {
+    const row = table.rows.item(rowIndex);
+    const group = row?.parentElement;
+    if (
+      !(row instanceof HTMLTableRowElement) ||
+      !(group instanceof HTMLTableSectionElement) ||
+      table.rows.length <= 1
+    ) {
+      return false;
+    }
+    const localRowIndex = Array.from(group.rows).indexOf(row);
+    const crossesBoundary = Array.from(mapTableSectionCellPositions(group).values()).some(
+      ({ rowIndex: start, rowSpan }) =>
+        rowSpan > 1 && start <= localRowIndex && localRowIndex < start + rowSpan
+    );
+    if (localRowIndex < 0 || crossesBoundary) {
+      return false;
+    }
+    row.remove();
+  }, '표 행 삭제');
+}
+
+export function deleteTableColumn(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId: string,
+  columnIndex: number
+): ReportDocument {
+  return mutateTable(report, sectionId, nodeId, (table) => {
+    const rows = Array.from(table.rows);
+    if (
+      !rows.length ||
+      rows.some(
+        (row) =>
+          row.cells.length <= 1 ||
+          Array.from(row.cells).some((cell) => cell.colSpan > 1 || cell.rowSpan > 1)
+      )
+    ) {
+      return false;
+    }
+    const cells = rows.map((row) => row.cells.item(columnIndex));
+    if (
+      cells.some(
+        (cell) =>
+          !(cell instanceof HTMLTableCellElement) || cell.colSpan > 1 || cell.rowSpan > 1
+      )
+    ) {
+      return false;
+    }
+    cells.forEach((cell) => cell!.remove());
+  }, '표 열 삭제');
+}
+
 export function addTableColumn(
   report: ReportDocument,
   sectionId: string,

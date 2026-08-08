@@ -11,6 +11,8 @@ import { getElementByPath } from '../src/lib/domPaths';
 import { editorSessionReducer, emptyEditorSession } from '../src/lib/editorSession';
 import {
   addTableRow,
+  deleteTableColumn,
+  deleteTableRow,
   insertImageAfterNode,
   insertTableAfterNode,
   unmergeTableCell
@@ -22,6 +24,59 @@ import type { ReportDocument } from '../src/types/htmlpoint';
   .IS_REACT_ACT_ENVIRONMENT = true;
 
 describe('table stabilization', () => {
+  it('deletes a body row at global index 1 and records the table-row operation', () => {
+    const report = reportWithTableHtml('<tbody><tr><td>First</td></tr><tr><td>Second</td></tr></tbody>');
+    const { section, table } = tableIdentity(report);
+
+    const updated = deleteTableRow(report, section.id, table.id, 1);
+
+    expect(tableCellRows(updated)).toEqual([['First']]);
+    expect(updated.operations.at(-1)?.label).toBe('표 행 삭제');
+  });
+
+  it('deletes a physical column from every row in a rectangular table', () => {
+    const report = reportWithTableHtml('<tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody>');
+    const { section, table } = tableIdentity(report);
+
+    const updated = deleteTableColumn(report, section.id, table.id, 1);
+
+    expect(tableCellRows(updated)).toEqual([['A'], ['C']]);
+    expect(updated.operations.at(-1)?.label).toBe('표 열 삭제');
+  });
+
+  it('rejects a column delete when rowspan makes DOM cell indices physically ambiguous', () => {
+    const report = reportWithTableHtml(
+      '<tbody><tr><td rowspan="2">Unrelated</td><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td><td>E</td></tr></tbody>'
+    );
+    const { section, table } = tableIdentity(report);
+
+    expect(deleteTableColumn(report, section.id, table.id, 1)).toBe(report);
+  });
+
+  it('returns the original report when deleting its final row', () => {
+    const report = reportWithTableHtml('<tbody><tr><td>Only</td></tr></tbody>');
+    const { section, table } = tableIdentity(report);
+
+    expect(deleteTableRow(report, section.id, table.id, 0)).toBe(report);
+  });
+
+  it('returns the original report when deleting a row intersecting rowspan', () => {
+    const report = reportWithTableHtml('<tbody><tr><td rowspan="2">Merged</td><td>A</td></tr><tr><td>B</td></tr></tbody>');
+    const { section, table } = tableIdentity(report);
+
+    expect(deleteTableRow(report, section.id, table.id, 1)).toBe(report);
+  });
+
+  it.each([
+    ['rowspan="2"', '<tbody><tr><td rowspan="2">Merged</td><td>A</td></tr><tr><td>B</td></tr></tbody>', 0],
+    ['colspan="2"', '<tbody><tr><td colspan="2">Merged</td></tr><tr><td>A</td><td>B</td></tr></tbody>', 0]
+  ])('returns the original report when deleting a column intersecting %s', (_label, html, columnIndex) => {
+    const report = reportWithTableHtml(html);
+    const { section, table } = tableIdentity(report);
+
+    expect(deleteTableColumn(report, section.id, table.id, columnIndex)).toBe(report);
+  });
+
   it('inserts a blank row immediately after A in a tbody-only table', () => {
     const report = parseReportHtml(`<!doctype html><html><body><main><section>
       <table><tbody>
@@ -604,6 +659,28 @@ function rowTexts(sectionHtml: string): string[] {
   return Array.from(
     parseHtml(sectionHtml).querySelectorAll('table tr'),
     (row) => row.textContent?.trim() ?? ''
+  );
+}
+
+function reportWithTableHtml(tableHtml: string): ReportDocument {
+  return parseReportHtml(
+    `<!doctype html><html><body><main><section><table>${tableHtml}</table></section></main></body></html>`
+  );
+}
+
+function tableIdentity(report: ReportDocument): {
+  section: ReportDocument['sections'][number];
+  table: ReportDocument['sections'][number]['editableNodes'][number];
+} {
+  const section = report.sections[0];
+  const table = section.editableNodes.find((node) => node.kind === 'table')!;
+  return { section, table };
+}
+
+function tableCellRows(report: ReportDocument): string[][] {
+  return Array.from(
+    parseHtml(report.sections[0].html).querySelectorAll<HTMLTableRowElement>('table tr'),
+    (row) => Array.from(row.cells, cellText)
   );
 }
 
