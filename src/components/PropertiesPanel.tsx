@@ -47,6 +47,8 @@ interface PropertiesPanelProps {
   onImageAnnotation: (nodeId: string, text: string, tone: 'note' | 'warning' | 'box') => void;
   onDrawImageArrow?: (nodeId: string) => void;
   imageArrowArmed?: boolean;
+  onDrawImageMosaic?: (nodeId: string) => void;
+  imageMosaicArmed?: boolean;
   onChartPresentation: (nodeId: string, settings: ChartPresentationSettings) => void;
   onChartData: (nodeId: string, rows: ChartDataRow[]) => void;
 }
@@ -83,6 +85,8 @@ export function PropertiesPanel({
   onImageAnnotation,
   onDrawImageArrow,
   imageArrowArmed,
+  onDrawImageMosaic,
+  imageMosaicArmed,
   onChartPresentation,
   onChartData
 }: PropertiesPanelProps): JSX.Element {
@@ -174,6 +178,8 @@ export function PropertiesPanel({
                     onImageAnnotation={onImageAnnotation}
                     onDrawImageArrow={onDrawImageArrow ?? (() => undefined)}
                     imageArrowArmed={imageArrowArmed}
+                    onDrawImageMosaic={onDrawImageMosaic ?? (() => undefined)}
+                    imageMosaicArmed={imageMosaicArmed}
                   />
                 )}
                 {activeTab === 'chart' && (
@@ -785,6 +791,7 @@ function ImageInspector({
   onImageAnnotation,
   onDrawImageArrow,
   imageArrowArmed = false
+  , onDrawImageMosaic, imageMosaicArmed = false
 }: {
   node: EditableNode;
   onReplaceImage: (nodeId: string) => void;
@@ -795,6 +802,8 @@ function ImageInspector({
   onImageAnnotation: (nodeId: string, text: string, tone: 'note' | 'warning' | 'box') => void;
   onDrawImageArrow: (nodeId: string) => void;
   imageArrowArmed?: boolean;
+  onDrawImageMosaic: (nodeId: string) => void;
+  imageMosaicArmed?: boolean;
 }): JSX.Element {
   const [settings, setSettings] = useState<ImageFilterSettings>({
     rotation: 0,
@@ -962,6 +971,9 @@ function ImageInspector({
         onClick={() => onDrawImageArrow(node.id)}
       >
         {imageArrowArmed ? 'Cancel Arrow' : 'Draw Arrow'}
+      </button>
+      <button type="button" className="secondary-button" aria-pressed={imageMosaicArmed} onClick={() => onDrawImageMosaic(node.id)}>
+        {imageMosaicArmed ? 'Cancel Mosaic' : 'Draw Mosaic'}
       </button>
       <label className="field">
         <span>Annotation</span>

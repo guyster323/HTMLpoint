@@ -25,5 +25,8 @@ describe('v1 plan achievement reporting', () => {
       status: 'complete',
       evidence: 'addImageArrowAnnotation/htmlpoint-add-image-arrow; text/box annotation exists'
     });
+    expect(v1PlanItems.find((item) => item.label === '모자이크/블러')).toMatchObject({
+      status: 'complete', evidence: 'addImageMosaic/htmlpoint-add-image-mosaic; blur filter exists'
+    });
   });
 });

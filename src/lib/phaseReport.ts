@@ -52,7 +52,7 @@ export const v1PlanItems: PlanItem[] = [
   { milestone: 'Milestone 4', label: '회전', status: 'complete', evidence: 'applyImageFilter rotation' },
   { milestone: 'Milestone 4', label: '밝기/대비', status: 'complete', evidence: 'applyImageFilter brightness/contrast' },
   { milestone: 'Milestone 4', label: '화살표/박스/텍스트 주석', status: 'complete', evidence: 'addImageArrowAnnotation/htmlpoint-add-image-arrow; text/box annotation exists' },
-  { milestone: 'Milestone 4', label: '모자이크/블러', status: 'partial', evidence: 'blur filter exists; pixel mosaic remains next phase' },
+  { milestone: 'Milestone 4', label: '모자이크/블러', status: 'complete', evidence: 'addImageMosaic/htmlpoint-add-image-mosaic; blur filter exists' },
   { milestone: 'Milestone 5', label: '샘플 4종 회귀 검수', status: 'complete', evidence: 'tests/referenceSamples.test.ts' },
   { milestone: 'Milestone 5', label: '브라우저 표시 검수', status: 'complete', evidence: 'Playwright rendered smoke tests' },
   { milestone: 'Milestone 5', label: '@media print 보존 검수', status: 'complete', evidence: 'serializer tests contain @media print assertion' },

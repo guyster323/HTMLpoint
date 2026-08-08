@@ -110,6 +110,7 @@ const PREVIEW_SELECTION_CSS = `
   .htmlpoint-image-arrow-ready {
     cursor: crosshair !important;
   }
+  .htmlpoint-image-mosaic-ready { cursor: crosshair !important; }
 `;
 
 export function buildPreviewSelectionPayload(
@@ -150,6 +151,7 @@ export function buildPreviewHtml(
   let selectedNodeId = ${JSON.stringify(selectedNodeId ?? '')};
   let selectedNodeIds = new Set(${JSON.stringify(initialSelectedNodeIds)});
   let imageArrowModeNodeId = '';
+  let imageMosaicModeNodeId = '';
   let marquee = null;
 
   function elementByPath(root, path) {
@@ -619,6 +621,45 @@ export function buildPreviewHtml(
     });
   }
 
+  function updateImageMosaicMode() {
+    htmlpointNodes.forEach((node) => {
+      const { target } = nodeElement(node.id);
+      if (target instanceof HTMLImageElement) target.classList.toggle('htmlpoint-image-mosaic-ready', node.id === imageMosaicModeNodeId);
+    });
+  }
+
+  function addImageMosaicDrawing(element, node) {
+    if (!(element instanceof HTMLImageElement)) return;
+    element.addEventListener('pointerdown', (event) => {
+      if (imageMosaicModeNodeId !== node.id) return;
+      event.preventDefault(); event.stopPropagation();
+      if (!isImageArrowEligible(element)) {
+        imageMosaicModeNodeId = ''; updateImageMosaicMode();
+        window.parent.postMessage({ source: 'htmlpoint-preview', type: 'htmlpoint-image-arrow-rejected', nodeId: node.id }, '*');
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) return;
+      const start = normalizedArrowPosition(event, rect);
+      const box = document.createElement('div');
+      box.setAttribute('style', 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #6d28d9;background:rgba(109,40,217,.16);');
+      document.documentElement.appendChild(box);
+      const update = (moveEvent) => {
+        const end = normalizedArrowPosition(moveEvent, rect);
+        const left = Math.min(start.x, end.x), top = Math.min(start.y, end.y);
+        box.style.left = (rect.left + rect.width * left / 100) + 'px'; box.style.top = (rect.top + rect.height * top / 100) + 'px';
+        box.style.width = (rect.width * Math.abs(end.x - start.x) / 100) + 'px'; box.style.height = (rect.height * Math.abs(end.y - start.y) / 100) + 'px';
+      };
+      const finish = (finishEvent) => {
+        const end = normalizedArrowPosition(finishEvent, rect); box.remove(); window.removeEventListener('pointermove', update);
+        imageMosaicModeNodeId = ''; updateImageMosaicMode();
+        window.parent.postMessage({ source: 'htmlpoint-preview', type: 'htmlpoint-add-image-mosaic', nodeId: node.id,
+          left: Math.min(start.x, end.x), top: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) }, '*');
+      };
+      window.addEventListener('pointermove', update); window.addEventListener('pointerup', finish, { once: true }); update(event);
+    });
+  }
+
   window.addEventListener('message', (event) => {
     const data = event.data || {};
     if (data.source !== 'htmlpoint-editor') return;
@@ -629,6 +670,11 @@ export function buildPreviewHtml(
     if (data.type === 'htmlpoint-set-image-arrow-mode') {
       imageArrowModeNodeId = typeof data.nodeId === 'string' ? data.nodeId : '';
       updateImageArrowMode();
+      return;
+    }
+    if (data.type === 'htmlpoint-set-image-mosaic-mode') {
+      imageMosaicModeNodeId = typeof data.nodeId === 'string' ? data.nodeId : '';
+      updateImageMosaicMode();
     }
   });
 
@@ -710,10 +756,12 @@ export function buildPreviewHtml(
           element.addEventListener('dblclick', (event) => beginInlineTextEdit(element, node, event));
           if (node.kind === 'image') {
             addImageArrowDrawing(element, node);
+            addImageMosaicDrawing(element, node);
           }
         }
       });
       updateImageArrowMode();
+      updateImageMosaicMode();
       if (selectedNodeId || selectedNodeIds.size) {
         paintSelections();
         if (selectedNodeId) {

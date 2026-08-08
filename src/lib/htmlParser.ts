@@ -267,6 +267,9 @@ export function collectEditableNodes(
   });
 
   sectionElement.querySelectorAll<HTMLImageElement>('img').forEach((element) => {
+    if (element.dataset.htmlpointImageMosaicSource === 'true') {
+      return;
+    }
     const path = getElementPath(sectionElement, element);
     nodes.push({
       id: makeNodeId(sectionId, path, 'image'),

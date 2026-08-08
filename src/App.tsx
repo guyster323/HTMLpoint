@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import {
   addImageAnnotation,
   addImageArrowAnnotation,
+  addImageMosaic,
   addTableColumn,
   addTableRow,
   applyTextEffect,
@@ -116,6 +117,7 @@ export function App(): JSX.Element {
   const [resizingProperties, setResizingProperties] = useState(false);
   const [selectionSnapshots, setSelectionSnapshots] = useState<Record<string, SelectionVisualSnapshot>>({});
   const [imageArrowModeNodeId, setImageArrowModeNodeId] = useState<string>();
+  const [imageMosaicModeNodeId, setImageMosaicModeNodeId] = useState<string>();
   const [pendingInsertionFeedback, setPendingInsertionFeedback] = useState<{
     requestId: string;
     successMessage: string;
@@ -373,6 +375,19 @@ export function App(): JSX.Element {
       }
 
       if (
+        event.data.type === 'htmlpoint-add-image-mosaic' && typeof event.data.nodeId === 'string' &&
+        event.data.nodeId === imageMosaicModeNodeId && selectedSectionId &&
+        selectedSection?.editableNodes.some((node) => node.id === event.data.nodeId) &&
+        Number.isFinite(event.data.left) && Number.isFinite(event.data.top) &&
+        Number.isFinite(event.data.width) && Number.isFinite(event.data.height)
+      ) {
+        const nodeId = event.data.nodeId;
+        commit((current) => addImageMosaic(current, selectedSectionId, nodeId, { left: event.data.left, top: event.data.top, width: event.data.width, height: event.data.height }));
+        setImageMosaicModeNodeId(undefined);
+        setMessage({ kind: 'status', text: '이미지 모자이크를 추가했습니다.' });
+        return;
+      }
+      if (
         event.data.type === 'htmlpoint-add-image-arrow' &&
         typeof event.data.nodeId === 'string' &&
         event.data.nodeId === imageArrowModeNodeId &&
@@ -400,9 +415,10 @@ export function App(): JSX.Element {
       if (
         event.data.type === 'htmlpoint-image-arrow-rejected' &&
         typeof event.data.nodeId === 'string' &&
-        event.data.nodeId === imageArrowModeNodeId
+        (event.data.nodeId === imageArrowModeNodeId || event.data.nodeId === imageMosaicModeNodeId)
       ) {
         setImageArrowModeNodeId(undefined);
+        setImageMosaicModeNodeId(undefined);
         setMessage({ kind: 'error', text: '화살표는 프레임, 크롭, 회전이 없는 이미지에서만 그릴 수 있습니다.' });
         return;
       }
@@ -442,7 +458,7 @@ export function App(): JSX.Element {
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [commit, commitTextEdit, imageArrowModeNodeId, selectedNodeId, selectedNodeIds, selectedSection, selectedSectionId]);
+  }, [commit, commitTextEdit, imageArrowModeNodeId, imageMosaicModeNodeId, selectedNodeId, selectedNodeIds, selectedSection, selectedSectionId]);
 
   useEffect(() => {
     if (!resizingProperties) {
@@ -1089,6 +1105,7 @@ export function App(): JSX.Element {
           selectedNodeId={selectedNodeId}
           selectedNodeIds={selectedNodeIds}
           imageArrowModeNodeId={imageArrowModeNodeId}
+          imageMosaicModeNodeId={imageMosaicModeNodeId}
           zoom={zoom}
           fitMode={fitMode}
           onFitZoomChange={setZoom}
@@ -1263,9 +1280,16 @@ export function App(): JSX.Element {
           }}
           onDrawImageArrow={(nodeId) => {
             setImageArrowModeNodeId((current) => current === nodeId ? undefined : nodeId);
+            setImageMosaicModeNodeId(undefined);
             setMessage({ kind: 'status', text: '이미지 위에서 드래그하여 화살표를 그리세요.' });
           }}
           imageArrowArmed={imageArrowModeNodeId === effectiveSelectedNode?.id}
+          onDrawImageMosaic={(nodeId) => {
+            setImageMosaicModeNodeId((current) => current === nodeId ? undefined : nodeId);
+            setImageArrowModeNodeId(undefined);
+            setMessage({ kind: 'status', text: '이미지 위에서 드래그하여 모자이크 영역을 지정하세요.' });
+          }}
+          imageMosaicArmed={imageMosaicModeNodeId === effectiveSelectedNode?.id}
           onChartPresentation={(nodeId, settings: ChartPresentationSettings) => {
             const sectionId = requireSection();
             if (sectionId) {

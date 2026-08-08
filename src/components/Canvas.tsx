@@ -25,6 +25,7 @@ interface CanvasProps {
   selectedNodeId?: string;
   selectedNodeIds?: string[];
   imageArrowModeNodeId?: string;
+  imageMosaicModeNodeId?: string;
   zoom: number;
   fitMode?: boolean;
   onFitZoomChange?: (zoom: number) => void;
@@ -45,6 +46,7 @@ export function Canvas({
   selectedNodeId,
   selectedNodeIds = selectedNodeId ? [selectedNodeId] : [],
   imageArrowModeNodeId,
+  imageMosaicModeNodeId,
   zoom,
   fitMode = false,
   onFitZoomChange,
@@ -180,6 +182,9 @@ export function Canvas({
       '*'
     );
   }, [imageArrowModeNodeId]);
+  const postImageMosaicModeToPreview = useCallback(() => {
+    iframeRef.current?.contentWindow?.postMessage({ source: 'htmlpoint-editor', type: 'htmlpoint-set-image-mosaic-mode', nodeId: imageMosaicModeNodeId }, '*');
+  }, [imageMosaicModeNodeId]);
 
   useEffect(() => {
     postSelectionToPreview();
@@ -188,6 +193,7 @@ export function Canvas({
   useEffect(() => {
     postImageArrowModeToPreview();
   }, [postImageArrowModeToPreview]);
+  useEffect(() => { postImageMosaicModeToPreview(); }, [postImageMosaicModeToPreview]);
 
   return (
     <main className="canvas-region">
@@ -223,6 +229,7 @@ export function Canvas({
                 onLoad={() => {
                   postSelectionToPreview();
                   postImageArrowModeToPreview();
+                  postImageMosaicModeToPreview();
                   if (previewHtml) onPreviewReady?.();
                 }}
               />

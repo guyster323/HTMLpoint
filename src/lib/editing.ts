@@ -27,6 +27,8 @@ export interface ImageArrowCoordinates {
   endY: number;
 }
 
+export interface ImageMosaicRegion { left: number; top: number; width: number; height: number; }
+
 const EFFECT_ORIGINAL_STYLE_ATTRIBUTE = 'data-htmlpoint-effect-original-style';
 const EFFECT_ORIGINAL_STYLE_PRESENT_ATTRIBUTE =
   'data-htmlpoint-effect-original-style-present';
@@ -766,6 +768,33 @@ export function addImageArrowAnnotation(
     const host = imageAnnotationHostFor(element) ?? wrapImageForAnnotations(element);
     host.appendChild(createImageArrowOverlay(element.ownerDocument, coordinates));
   }, '이미지 화살표 주석 추가');
+}
+
+export function addImageMosaic(report: ReportDocument, sectionId: string, nodeId: string, region: ImageMosaicRegion): ReportDocument {
+  if (!isValidMosaicRegion(region)) return report;
+  return mutateNode(report, sectionId, nodeId, (_root, element) => {
+    if (!(element instanceof HTMLImageElement) || !isImageArrowAnnotationSupported(element)) return false;
+    const host = imageAnnotationHostFor(element) ?? wrapImageForAnnotations(element);
+    const mosaic = element.ownerDocument.createElement('span');
+    mosaic.dataset.htmlpointImageMosaic = 'true';
+    mosaic.setAttribute('style', `position:absolute;left:${region.left}%;top:${region.top}%;width:${region.width}%;height:${region.height}%;overflow:hidden;pointer-events:none;`);
+    const copy = element.ownerDocument.createElement('img');
+    copy.dataset.htmlpointImageMosaicSource = 'true';
+    copy.setAttribute('src', element.getAttribute('src') ?? element.src);
+    copy.setAttribute('alt', '');
+    copy.setAttribute('aria-hidden', 'true');
+    const blockScale = 8;
+    copy.setAttribute('style', `position:absolute;max-width:none;width:${100 / region.width / blockScale * 100}%;height:${100 / region.height / blockScale * 100}%;left:-${region.left / region.width * 100}%;top:-${region.top / region.height * 100}%;transform:scale(${blockScale});transform-origin:0 0;image-rendering:pixelated;`);
+    mosaic.appendChild(copy);
+    const arrow = host.querySelector('[data-htmlpoint-image-arrow="true"]');
+    host.insertBefore(mosaic, arrow);
+  }, '이미지 모자이크 추가');
+}
+
+function isValidMosaicRegion(region: ImageMosaicRegion): boolean {
+  const values = [region.left, region.top, region.width, region.height];
+  return values.every((value) => Number.isFinite(value) && value >= 0 && value <= 100) &&
+    region.width >= 2 && region.height >= 2 && region.left + region.width <= 100 && region.top + region.height <= 100;
 }
 
 function areValidImageArrowCoordinates(coordinates: ImageArrowCoordinates): boolean {
