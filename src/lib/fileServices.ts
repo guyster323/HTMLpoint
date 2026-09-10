@@ -15,13 +15,13 @@ export interface OpenedHtmlFile {
   html: string;
   backupPath?: string;
   warnings?: string[];
+  recovered?: boolean;
 }
 
 export interface SavedHtmlFile {
   filePath: string;
   warnings?: string[];
 }
-
 const FALLBACK_SAMPLES: SampleFile[] = [
   {
     fileName: 'Noise_Demand_Analysis_20260609.html',
@@ -40,14 +40,12 @@ const FALLBACK_SAMPLES: SampleFile[] = [
     filePath: 'HTML_reference/GR19KR0011_아이파워_국내PV(성원태양광)_BSC_Log_data_오류_분석_Report.html'
   }
 ];
-
 export async function listSamples(): Promise<SampleFile[]> {
   if (window.htmlpoint) {
     return window.htmlpoint.listSamples();
   }
   return FALLBACK_SAMPLES;
 }
-
 export async function openSample(sample: SampleFile): Promise<OpenedHtmlFile> {
   if (window.htmlpoint) {
     return window.htmlpoint.openSample(sample.filePath);
@@ -62,7 +60,6 @@ export async function openSample(sample: SampleFile): Promise<OpenedHtmlFile> {
     html: stripDevServerInjection(await response.text())
   };
 }
-
 export async function openHtmlDialog(): Promise<OpenedHtmlFile | null> {
   if (!window.htmlpoint) {
     return null;
@@ -71,17 +68,16 @@ export async function openHtmlDialog(): Promise<OpenedHtmlFile | null> {
 }
 
 export function parseOpenedFile(file: OpenedHtmlFile): ReportDocument {
-  return parseReportHtml(file.html, {
+  const report = parseReportHtml(file.html, {
     fileName: file.fileName,
     sourcePath: file.filePath
   });
+  return file.recovered ? { ...report, dirty: true } : report;
 }
-
 export async function saveAsHtml(report: ReportDocument): Promise<SavedHtmlFile | undefined> {
   const result = serializeReportHtml(report);
   const fallbackName = report.fileName?.replace(/\.html?$/i, '') || 'htmlpoint-report';
   const defaultPath = `${fallbackName}.html`;
-
   if (window.htmlpoint) {
     const saved = await window.htmlpoint.saveAsHtml({
       defaultPath,
@@ -91,7 +87,6 @@ export async function saveAsHtml(report: ReportDocument): Promise<SavedHtmlFile 
     });
     return saved ?? undefined;
   }
-
   const blob = new Blob([result.html], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -101,7 +96,18 @@ export async function saveAsHtml(report: ReportDocument): Promise<SavedHtmlFile 
   URL.revokeObjectURL(url);
   return { filePath: defaultPath, warnings: result.warnings };
 }
-
+export async function saveHtml(report: ReportDocument): Promise<SavedHtmlFile | undefined> {
+  const result = serializeReportHtml(report);
+  if (window.htmlpoint?.saveHtml && report.sourcePath) {
+    return window.htmlpoint.saveHtml({
+      filePath: report.sourcePath,
+      html: result.html,
+      sourcePath: report.sourcePath,
+      warnings: result.warnings
+    });
+  }
+  return saveAsHtml(report);
+}
 export async function createAutoBackup(report: ReportDocument): Promise<{ backupPath?: string; warnings: string[] }> {
   if (!window.htmlpoint || !report.sourcePath) {
     return { warnings: [] };
@@ -113,14 +119,12 @@ export async function createAutoBackup(report: ReportDocument): Promise<{ backup
   });
   return { backupPath: backup.backupPath, warnings: result.warnings };
 }
-
 export async function openImageAsDataUrl(): Promise<{ fileName: string; dataUrl: string } | null> {
   if (!window.htmlpoint) {
     return null;
   }
   return window.htmlpoint.openImageDialog();
 }
-
 function stripDevServerInjection(html: string): string {
   return html
     .replace(/<script\b[^>]*type=["']module["'][^>]*>[\s\S]*?@react-refresh[\s\S]*?<\/script>/gi, '')

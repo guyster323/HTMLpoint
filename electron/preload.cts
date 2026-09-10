@@ -8,8 +8,8 @@ interface HtmlFilePayload {
   html: string;
   backupPath?: string;
   warnings?: string[];
+  recovered?: boolean;
 }
-
 const api = {
   listSamples: () => ipcRenderer.invoke('htmlpoint:list-samples'),
   openHtmlDialog: () => ipcRenderer.invoke('htmlpoint:open-dialog'),
@@ -19,10 +19,14 @@ const api = {
     return ipcRenderer.invoke('htmlpoint:open-dropped-file', filePath);
   },
   openSample: (filePath: string) => ipcRenderer.invoke('htmlpoint:open-sample', filePath),
+  saveHtml: (payload: { filePath: string; html: string; sourcePath?: string; warnings?: string[] }) =>
+    ipcRenderer.invoke('htmlpoint:save', payload),
   saveAsHtml: (payload: { defaultPath?: string; html: string; sourcePath?: string; warnings?: string[] }) =>
     ipcRenderer.invoke('htmlpoint:save-as', payload),
   createBackup: (payload: { filePath: string; html: string }) =>
     ipcRenderer.invoke('htmlpoint:create-backup', payload),
+  discardAutoBackups: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('htmlpoint:discard-auto-backups', filePath),
   openImageDialog: () => ipcRenderer.invoke('htmlpoint:open-image-dialog'),
   registerPreviewSource: (sourcePath: string): Promise<string> =>
     ipcRenderer.invoke('htmlpoint:register-preview-source', sourcePath),
@@ -38,6 +42,13 @@ const api = {
     ipcRenderer.on('htmlpoint:menu-save-as', wrapped);
     return () => {
       ipcRenderer.off('htmlpoint:menu-save-as', wrapped);
+    };
+  },
+  onMenuSave: (listener: Listener<void>) => {
+    const wrapped = () => listener();
+    ipcRenderer.on('htmlpoint:menu-save', wrapped);
+    return () => {
+      ipcRenderer.off('htmlpoint:menu-save', wrapped);
     };
   },
   onMenuUndo: (listener: Listener<void>) => {
@@ -68,7 +79,6 @@ const api = {
     ipcRenderer.send('htmlpoint:confirm-close');
   }
 };
-
 contextBridge.exposeInMainWorld('htmlpoint', api);
 
 export type HtmlpointApi = typeof api;

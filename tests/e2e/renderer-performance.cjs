@@ -1,5 +1,4 @@
 const { chromium } = require('@playwright/test');
-
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1024, height: 768 } });
@@ -9,7 +8,7 @@ const { chromium } = require('@playwright/test');
       scrollWidth: document.body.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
       hasOpen: Boolean(document.querySelector('button[aria-label="Open HTML"]')),
-      saveDisabled: document.querySelector('button[aria-label="Save As HTML"]')?.disabled,
+      saveDisabled: document.querySelector('button[aria-label="Save"]')?.disabled,
       hasSectionsControl: Boolean(document.querySelector('[aria-label="Collapse sections panel"]')),
       hasPropertiesControl: Boolean(document.querySelector('[aria-label="Collapse properties panel"]'))
     }));

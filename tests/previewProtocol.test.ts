@@ -7,29 +7,32 @@ import {
   previewBaseUrlForToken
 } from '../electron/previewProtocol';
 
+const testRoot = path.join(path.parse(process.cwd()).root, 'HTMLpoint-preview-tests');
+const testPath = (...segments: string[]) => path.join(testRoot, ...segments);
+
 describe('preview asset protocol registry', () => {
   it('issues opaque token bases and resolves encoded paths inside the registered root', async () => {
     const registry = new PreviewAssetRegistry(() => 'token-a');
-    const baseUrl = await registry.register(17, 'C:\\Reports\\Quarter One\\deck.html');
+    const sourcePath = testPath('Quarter One', 'deck.html');
 
+    const baseUrl = await registry.register(17, sourcePath);
     expect(PREVIEW_ASSET_SCHEME).toBe('htmlpoint-asset');
     expect(baseUrl).toBe('htmlpoint-asset://token-a/');
     expect(previewBaseUrlForToken('token-a')).toBe(baseUrl);
     await expect(registry.resolve(`${baseUrl}assets/plot%20one.png`)).resolves.toBe(
-      path.resolve('C:\\Reports\\Quarter One\\assets\\plot one.png')
+      testPath('Quarter One', 'assets', 'plot one.png')
     );
   });
 
   it('rejects traversal, unknown tokens, and real-path escapes', async () => {
-    const root = path.resolve('C:\\Reports\\Quarter One');
     const registry = new PreviewAssetRegistry(
       () => 'token-a',
       async (candidate) =>
         candidate.endsWith(`${path.sep}linked${path.sep}secret.png`)
-          ? path.resolve('C:\\Secrets\\secret.png')
+          ? testPath('Secrets', 'secret.png')
           : path.resolve(candidate)
     );
-    const baseUrl = await registry.register(17, path.join(root, 'deck.html'));
+    const baseUrl = await registry.register(17, testPath('Quarter One', 'deck.html'));
 
     await expect(registry.resolve(`${baseUrl}..%2Fsecret.txt`)).resolves.toBeUndefined();
     await expect(registry.resolve(`${baseUrl}linked/secret.png`)).resolves.toBeUndefined();
@@ -41,20 +44,20 @@ describe('preview asset protocol registry', () => {
   it('replaces the previous token per renderer and cleans registrations on revoke or clear', async () => {
     const tokens = ['token-a', 'token-b'];
     const registry = new PreviewAssetRegistry(() => tokens.shift() ?? 'token-c');
-    const firstBase = await registry.register(17, 'C:\\Reports\\One\\first.html');
-    const secondBase = await registry.register(17, 'D:\\Reports\\Two\\second.html');
+    const firstBase = await registry.register(17, testPath('One', 'first.html'));
+    const secondBase = await registry.register(17, testPath('Two', 'second.html'));
 
     expect(registry.size).toBe(1);
     await expect(registry.resolve(`${firstBase}assets/a.png`)).resolves.toBeUndefined();
     await expect(registry.resolve(`${secondBase}assets/b.png`)).resolves.toBe(
-      path.resolve('D:\\Reports\\Two\\assets\\b.png')
+      testPath('Two', 'assets', 'b.png')
     );
 
     registry.revokeOwner(17);
     expect(registry.size).toBe(0);
     await expect(registry.resolve(`${secondBase}assets/b.png`)).resolves.toBeUndefined();
 
-    await registry.register(18, 'C:\\Reports\\Three\\third.html');
+    await registry.register(18, testPath('Three', 'third.html'));
     registry.clear();
     expect(registry.size).toBe(0);
   });
@@ -82,17 +85,17 @@ describe('preview asset protocol registry', () => {
     );
 
     const firstRegistration = registry
-      .register(17, 'C:\\Reports\\One\\first.html')
+      .register(17, testPath('One', 'first.html'))
       .then(() => 'resolved', (error: unknown) => String(error));
-    const secondRegistration = registry.register(17, 'D:\\Reports\\Two\\second.html');
+    const secondRegistration = registry.register(17, testPath('Two', 'second.html'));
 
-    resolveSecondRoot?.(path.resolve('D:\\Reports\\Two'));
+    resolveSecondRoot?.(testPath('Two'));
     const secondBase = await secondRegistration;
-    resolveFirstRoot?.(path.resolve('C:\\Reports\\One'));
+    resolveFirstRoot?.(testPath('One'));
 
     expect(await firstRegistration).toContain('superseded');
     await expect(registry.resolve(`${secondBase}assets/current.png`)).resolves.toBe(
-      path.resolve('D:\\Reports\\Two\\assets\\current.png')
+      testPath('Two', 'assets', 'current.png')
     );
   });
 
@@ -120,18 +123,18 @@ describe('preview asset protocol registry', () => {
     );
 
     const oldRegistration = registry
-      .register(17, 'C:\\Reports\\Old\\old.html')
+      .register(17, testPath('Old', 'old.html'))
       .then(() => 'resolved', (error: unknown) => String(error));
     registry.clear();
-    const newRegistration = registry.register(17, 'D:\\Reports\\New\\new.html');
+    const newRegistration = registry.register(17, testPath('New', 'new.html'));
 
-    resolveNewRoot?.(path.resolve('D:\\Reports\\New'));
+    resolveNewRoot?.(testPath('New'));
     const newBase = await newRegistration;
-    resolveOldRoot?.(path.resolve('C:\\Reports\\Old'));
+    resolveOldRoot?.(testPath('Old'));
 
     expect(await oldRegistration).toContain('superseded');
     await expect(registry.resolve(`${newBase}assets/current.png`)).resolves.toBe(
-      path.resolve('D:\\Reports\\New\\assets\\current.png')
+      testPath('New', 'assets', 'current.png')
     );
   });
 

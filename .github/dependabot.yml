@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "01:00"
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 5
+    groups:
+      runtime-and-build:
+        patterns:
+          - electron
+          - electron-builder
+          - vite
+          - "@vitejs/*"
+      test-tools:
+        patterns:
+          - vitest
+          - "@playwright/*"

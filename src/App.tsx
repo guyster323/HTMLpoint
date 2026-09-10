@@ -38,6 +38,7 @@ import {
   createAutoBackup,
   openHtmlDialog,
   openImageAsDataUrl,
+  saveHtml,
   saveAsHtml
 } from './lib/fileServices';
 import { acceptDroppedHtmlFile } from './lib/dropImport';
@@ -84,11 +85,9 @@ import {
   TextEffectSettings,
   TextStyleSettings
 } from './types/htmlpoint';
-
 type TransientOutput =
   | { kind: 'status'; text: string }
   | { kind: 'error'; text: string };
-
 export function App(): JSX.Element {
   const [editorSession, dispatchEditorSession] = useReducer(
     editorSessionReducer,
@@ -129,7 +128,6 @@ export function App(): JSX.Element {
   const pendingCancelButtonRef = useRef<HTMLButtonElement>(null);
   const changeSummaryCloseButtonRef = useRef<HTMLButtonElement>(null);
   reportRef.current = report;
-
   const selectedSectionId = selection.sectionId;
   const selectedNodeId = selection.nodeId;
   const selectedNodeIds = selection.nodeIds;
@@ -139,14 +137,12 @@ export function App(): JSX.Element {
     () => buildChangeSummaryEntries(changeSummaryOpen, report),
     [changeSummaryOpen, report]
   );
-
   const commit = useCallback((
     updater: (current: ReportDocument) => ReportDocument,
     updateSelection?: (context: EditorSelectionTransitionContext) => EditorSelection
   ) => {
     dispatchEditorSession({ type: 'commit', updateReport: updater, updateSelection });
   }, []);
-
   const commitInsertion = useCallback((
     sectionId: string,
     insert: (current: ReportDocument) => EditResult,
@@ -162,7 +158,6 @@ export function App(): JSX.Element {
       insert
     });
   }, []);
-
   const commitTextEdit = useCallback((
     sectionId: string,
     nodeId: string,
@@ -177,7 +172,6 @@ export function App(): JSX.Element {
     if (!currentReport) {
       return;
     }
-
     const outcome = editTextNodeWithOutcome(
       currentReport,
       sectionId,
@@ -189,7 +183,6 @@ export function App(): JSX.Element {
       setMessage({ kind: 'error', text: outcome.validation.message });
       return;
     }
-
     dispatchEditorSession({
       type: 'commit',
       updateReport: (current) =>
@@ -204,11 +197,9 @@ export function App(): JSX.Element {
   const handleUndo = useCallback(() => {
     dispatchEditorSession({ type: 'undo' });
   }, []);
-
   const handleRedo = useCallback(() => {
     dispatchEditorSession({ type: 'redo' });
   }, []);
-
   useEffect(() => {
     if (!shouldCreateAutoBackup(report)) {
       return;
@@ -232,7 +223,6 @@ export function App(): JSX.Element {
     }, 5000);
     return () => window.clearTimeout(timer);
   }, [report]);
-
   const selectedSectionIndex = useMemo(
     () => report?.sections.findIndex((section) => section.id === selectedSectionId) ?? -1,
     [report?.sections, selectedSectionId]
@@ -247,7 +237,6 @@ export function App(): JSX.Element {
     () => selectedSection?.editableNodes.find((node) => node.id === selectedNodeId),
     [selectedNodeId, selectedSection]
   );
-
   const selectedNodes = useMemo(
     () =>
       (selectedSection?.editableNodes ?? []).filter((node) =>
@@ -262,7 +251,6 @@ export function App(): JSX.Element {
       selectedNodes.every((node) => node.kind === selectedNodes[0]?.kind),
     [selectedNodes]
   );
-
   const effectiveSelectedNode = sameKindSelection
     ? mergeNodeSnapshot(selectedNode, selectedNodeId ? selectionSnapshots[selectedNodeId] : undefined)
     : undefined;
@@ -270,7 +258,6 @@ export function App(): JSX.Element {
   useEffect(() => {
     setSelectionSnapshots({});
   }, [report?.id, report?.updatedAt]);
-
   useEffect(() => {
     if (
       !pendingInsertionFeedback ||
@@ -284,17 +271,18 @@ export function App(): JSX.Element {
     }
     setPendingInsertionFeedback(undefined);
   }, [lastInsertionResult, pendingInsertionFeedback]);
-
   useEffect(() => {
     dispatchEditorSession({ type: 'normalize-selection' });
   }, [report]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.data?.source !== 'htmlpoint-preview') {
+      const previewWindow = document.querySelector<HTMLIFrameElement>(
+        'iframe[title="Report preview"]'
+      )?.contentWindow;
+      if (event.source !== previewWindow || event.data?.source !== 'htmlpoint-preview') {
         return;
       }
-
       if (
         event.data.type === 'htmlpoint-select-node' &&
         typeof event.data.nodeId === 'string' &&
@@ -325,7 +313,6 @@ export function App(): JSX.Element {
         }));
         return;
       }
-
       if (event.data.type === 'htmlpoint-select-nodes' && Array.isArray(event.data.nodeIds)) {
         if (
           isSelectionSnapshot(event.data.snapshot) &&
@@ -352,7 +339,6 @@ export function App(): JSX.Element {
         }
         return;
       }
-
       if (
         event.data.type === 'htmlpoint-edit-text' &&
         typeof event.data.nodeId === 'string' &&
@@ -373,7 +359,6 @@ export function App(): JSX.Element {
         });
         return;
       }
-
       if (
         event.data.type === 'htmlpoint-add-image-mosaic' && typeof event.data.nodeId === 'string' &&
         event.data.nodeId === imageMosaicModeNodeId && selectedSectionId &&
@@ -411,7 +396,6 @@ export function App(): JSX.Element {
         setMessage({ kind: 'status', text: '이미지 화살표 주석을 추가했습니다.' });
         return;
       }
-
       if (
         event.data.type === 'htmlpoint-image-arrow-rejected' &&
         typeof event.data.nodeId === 'string' &&
@@ -422,7 +406,6 @@ export function App(): JSX.Element {
         setMessage({ kind: 'error', text: '화살표는 프레임, 크롭, 회전이 없는 이미지에서만 그릴 수 있습니다.' });
         return;
       }
-
       if (
         event.data.type === 'htmlpoint-resize-image' &&
         typeof event.data.nodeId === 'string' &&
@@ -438,7 +421,6 @@ export function App(): JSX.Element {
           })
         );
       }
-
       if (
         event.data.type === 'htmlpoint-resize-image-frame' &&
         typeof event.data.nodeId === 'string' &&
@@ -455,7 +437,6 @@ export function App(): JSX.Element {
         );
       }
     };
-
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [commit, commitTextEdit, imageArrowModeNodeId, imageMosaicModeNodeId, selectedNodeId, selectedNodeIds, selectedSection, selectedSectionId]);
@@ -464,12 +445,10 @@ export function App(): JSX.Element {
     if (!resizingProperties) {
       return;
     }
-
     const handlePointerMove = (event: PointerEvent) => {
       setPropertiesWidth(clampPropertiesWidth(window.innerWidth - event.clientX));
     };
     const handlePointerUp = () => setResizingProperties(false);
-
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp, { once: true });
     return () => {
@@ -477,7 +456,6 @@ export function App(): JSX.Element {
       window.removeEventListener('pointerup', handlePointerUp);
     };
   }, [resizingProperties]);
-
   const loadReport = useCallback(
     (
       nextReport: ReportDocument,
@@ -496,7 +474,6 @@ export function App(): JSX.Element {
     },
     []
   );
-
   const setPendingAction = useCallback((action: PendingDocumentAction | null) => {
     pendingDocumentActionRef.current = action;
     setPendingDocumentAction(action);
@@ -506,24 +483,21 @@ export function App(): JSX.Element {
     documentActionBusyRef.current = busy;
     setDocumentActionBusy(busy);
   }, []);
-
   const saveReportSnapshot = useCallback(
-    async (reportToSave: ReportDocument): Promise<SaveAttemptResult> => {
+    async (reportToSave: ReportDocument, forceSaveAs = false): Promise<SaveAttemptResult> => {
       let savedFile: Awaited<ReturnType<typeof saveAsHtml>>;
       try {
-        savedFile = await saveAsHtml(reportToSave);
+        savedFile = forceSaveAs ? await saveAsHtml(reportToSave) : await saveHtml(reportToSave);
       } catch (error) {
         const failureMessage = `저장 실패: ${errorMessage(error)}`;
         setMessage({ kind: 'error', text: failureMessage });
         return { status: 'failed', message: failureMessage };
       }
-
       if (!savedFile) {
         const cancellationMessage = '저장이 취소되었습니다. 저장하지 않은 변경은 그대로 유지됩니다.';
         setMessage({ kind: 'status', text: cancellationMessage });
         return { status: 'cancelled', message: cancellationMessage };
       }
-
       const { filePath, warnings = [] } = savedFile;
       const warning = warnings.join(' ');
       const savedReport = nextReportAfterSave(reportToSave, filePath);
@@ -547,7 +521,6 @@ export function App(): JSX.Element {
         setMessage({ kind: 'error', text: staleMessage });
         return { status: 'stale', warning, message: staleMessage };
       }
-
       reportRef.current = savedReport;
       dispatchEditorSession({
         type: 'save-checkpoint',
@@ -563,7 +536,6 @@ export function App(): JSX.Element {
     },
     []
   );
-
   const loadOpenedFile = useCallback(
     (
       opened: Parameters<typeof validateOpenedReport>[0],
@@ -574,7 +546,6 @@ export function App(): JSX.Element {
       if (currentReport?.dirty && currentReport !== allowedReport) {
         return { type: 'opened-file', opened };
       }
-
       performance.mark('htmlpoint:parse:start');
       const nextReport = validateOpenedReport(opened);
       performance.mark('htmlpoint:parse:end');
@@ -583,7 +554,6 @@ export function App(): JSX.Element {
     },
     [loadReport]
   );
-
   const executeDocumentAction = useCallback(
     async (
       action: PendingDocumentAction,
@@ -601,7 +571,6 @@ export function App(): JSX.Element {
             `${action.file.name} dropped and loaded`
           );
         }
-
         const currentReport = reportRef.current;
         if (currentReport?.dirty && currentReport !== allowedReport) {
           return action;
@@ -615,7 +584,6 @@ export function App(): JSX.Element {
     },
     [loadOpenedFile]
   );
-
   const runDocumentAction = useCallback(
     async (action: PendingDocumentAction, allowedReport: ReportDocument | null) => {
       setActionBusy(true);
@@ -634,7 +602,6 @@ export function App(): JSX.Element {
     },
     [executeDocumentAction, setActionBusy, setPendingAction]
   );
-
   const requestDocumentAction = useCallback(
     (action: PendingDocumentAction) => {
       if (pendingDocumentActionRef.current || documentActionBusyRef.current) {
@@ -652,7 +619,6 @@ export function App(): JSX.Element {
     },
     [runDocumentAction, setPendingAction]
   );
-
   const handleOpen = useCallback(async () => {
     if (pendingDocumentActionRef.current || documentActionBusyRef.current) {
       return;
@@ -670,7 +636,6 @@ export function App(): JSX.Element {
       requestDocumentAction({ type: 'opened-file', opened });
     }
   }, [requestDocumentAction, setActionBusy]);
-
   const handleDroppedFiles = useCallback(
     (files: FileList | File[]) => {
       const file = Array.from(files)[0];
@@ -680,8 +645,7 @@ export function App(): JSX.Element {
     },
     [requestDocumentAction]
   );
-
-  const handleSaveAs = useCallback(async () => {
+  const saveCurrentReport = useCallback(async (forceSaveAs: boolean) => {
     if (pendingDocumentActionRef.current || documentActionBusyRef.current) {
       return;
     }
@@ -691,19 +655,19 @@ export function App(): JSX.Element {
     }
     setActionBusy(true);
     try {
-      await saveReportSnapshot(currentReport);
+      await saveReportSnapshot(currentReport, forceSaveAs);
     } finally {
       setActionBusy(false);
     }
   }, [saveReportSnapshot, setActionBusy]);
-
+  const handleSave = useCallback(() => saveCurrentReport(false), [saveCurrentReport]);
+  const handleSaveAs = useCallback(() => saveCurrentReport(true), [saveCurrentReport]);
   const handlePendingSave = useCallback(async () => {
     const action = pendingDocumentActionRef.current;
     const reportToSave = reportRef.current;
     if (!action || !reportToSave || documentActionBusyRef.current) {
       return;
     }
-
     setActionBusy(true);
     try {
       setPendingSaveFeedback(undefined);
@@ -736,16 +700,21 @@ export function App(): JSX.Element {
       setActionBusy(false);
     }
   }, [executeDocumentAction, saveReportSnapshot, setActionBusy, setPendingAction]);
-
   const handlePendingDiscard = useCallback(async () => {
     const action = pendingDocumentActionRef.current;
     if (!action || documentActionBusyRef.current) {
       return;
     }
-
     const discardedReport = reportRef.current;
     setActionBusy(true);
     try {
+      if (discardedReport?.sourcePath) {
+        try {
+          await window.htmlpoint?.discardAutoBackups?.(discardedReport.sourcePath);
+        } catch (error) {
+          setMessage({ kind: 'error', text: `자동 복구본 정리 경고: ${errorMessage(error)}` });
+        }
+      }
       const deferredAction = await executeDocumentAction(action, discardedReport);
       setPendingSaveWarning(undefined);
       setPendingSaveFeedback(undefined);
@@ -754,7 +723,6 @@ export function App(): JSX.Element {
       setActionBusy(false);
     }
   }, [executeDocumentAction, setActionBusy, setPendingAction]);
-
   const handlePendingCancel = useCallback(() => {
     if (!documentActionBusyRef.current) {
       setPendingSaveWarning(undefined);
@@ -762,7 +730,6 @@ export function App(): JSX.Element {
       setPendingAction(null);
     }
   }, [setPendingAction]);
-
   const handlePendingWarning = useCallback(async () => {
     const action = pendingDocumentActionRef.current;
     const continuationReport = pendingSaveWarning?.continuationReport;
@@ -777,7 +744,6 @@ export function App(): JSX.Element {
       setPendingSaveWarning(undefined);
       return;
     }
-
     setActionBusy(true);
     try {
       const deferredAction = await executeDocumentAction(action, continuationReport);
@@ -788,13 +754,15 @@ export function App(): JSX.Element {
       setActionBusy(false);
     }
   }, [executeDocumentAction, pendingSaveWarning, setActionBusy, setPendingAction]);
-
   useEffect(() => {
     const offOpened = window.htmlpoint?.onOpenedFile((opened) => {
       requestDocumentAction({ type: 'opened-file', opened });
     });
     const offSaveAs = window.htmlpoint?.onMenuSaveAs(() => {
       void handleSaveAs();
+    });
+    const offSave = window.htmlpoint?.onMenuSave?.(() => {
+      void handleSave();
     });
     const offUndo = window.htmlpoint?.onMenuUndo?.(() => handleUndo());
     const offRedo = window.htmlpoint?.onMenuRedo?.(() => handleRedo());
@@ -807,13 +775,13 @@ export function App(): JSX.Element {
     return () => {
       offOpened?.();
       offSaveAs?.();
+      offSave?.();
       offUndo?.();
       offRedo?.();
       offCloseRequested?.();
       offOperationError?.();
     };
-  }, [handleRedo, handleSaveAs, handleUndo, requestDocumentAction]);
-
+  }, [handleRedo, handleSave, handleSaveAs, handleUndo, requestDocumentAction]);
   useEffect(() => {
     const handleHistoryShortcut = (event: KeyboardEvent) => {
       if (!event.ctrlKey && !event.metaKey) return;
@@ -830,10 +798,8 @@ export function App(): JSX.Element {
     window.addEventListener('keydown', handleHistoryShortcut);
     return () => window.removeEventListener('keydown', handleHistoryShortcut);
   }, [handleRedo, handleUndo]);
-
   const requireSection = useCallback(() => selectedSectionId, [selectedSectionId]);
   const requireNode = useCallback(() => selectedNodeId, [selectedNodeId]);
-
   const handleSelectNode = useCallback((nodeId: string, additive = false) => {
     setSelection((current) => {
       if (!additive) {
@@ -851,7 +817,6 @@ export function App(): JSX.Element {
       };
     });
   }, []);
-
   const selectedTextNodeIds = useMemo(
     () =>
       (selectedNodes.length ? selectedNodes : selectedNode ? [selectedNode] : [])
@@ -859,7 +824,6 @@ export function App(): JSX.Element {
         .map((node) => node.id),
     [selectedNode, selectedNodes]
   );
-
   const handleTextStyle = useCallback(
     (settings: TextStyleSettings) => {
       const sectionId = requireSection();
@@ -869,7 +833,6 @@ export function App(): JSX.Element {
     },
     [commit, requireSection, selectedTextNodeIds]
   );
-
   const handleReplaceImage = useCallback(
     async (nodeId: string) => {
       const image = await openImageAsDataUrl();
@@ -880,7 +843,6 @@ export function App(): JSX.Element {
     },
     [commit, selectedSectionId]
   );
-
   const handleInsertImage = useCallback(async () => {
     const sectionId = requireSection();
     if (!sectionId) {
@@ -898,7 +860,6 @@ export function App(): JSX.Element {
       'Image inserted'
     );
   }, [commitInsertion, requireNode, requireSection]);
-
   const handleDeleteSection = useCallback(() => {
     if (!selectedSectionId) {
       return;
@@ -917,7 +878,6 @@ export function App(): JSX.Element {
       }
     });
   }, [selectedSectionId]);
-
   const sectionHidden = Boolean(selectedSection?.hidden);
   const handleManualZoomChange = useCallback((nextZoom: number) => {
     setFitMode(false);
@@ -932,7 +892,6 @@ export function App(): JSX.Element {
     sectionsPanelExpanded ? '' : 'sections-collapsed',
     propertiesPanelExpanded ? '' : 'properties-collapsed'
   ].filter(Boolean).join(' ');
-
   return (
     <div
       className={dragActive ? 'app-shell drag-active' : 'app-shell'}
@@ -973,6 +932,7 @@ export function App(): JSX.Element {
         canRedo={future.length > 0}
         onTabChange={setActiveTab}
         onOpen={handleOpen}
+        onSave={handleSave}
         onSaveAs={handleSaveAs}
         onUndo={handleUndo}
         onRedo={handleRedo}
@@ -1424,7 +1384,6 @@ export function App(): JSX.Element {
     </div>
   );
 }
-
 type SaveAttemptResult =
   | { status: 'saved'; report: ReportDocument; warning?: string }
   | { status: 'stale'; warning?: string; message: string }
@@ -1438,7 +1397,6 @@ interface PendingSaveWarning {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
-
 function isSelectionSnapshot(value: unknown): value is SelectionVisualSnapshot {
   return Boolean(
     value &&
@@ -1454,7 +1412,6 @@ function mergeNodeSnapshot(
   if (!node || !snapshot || snapshot.nodeId !== node.id) {
     return node;
   }
-
   return {
     ...node,
     textStyle: snapshot.textStyle ?? node.textStyle,
