@@ -131,15 +131,23 @@ export interface ReportSection {
   id: string;
   kind: ReportSectionKind;
   title: string;
+  sourceId?: string;
+  languageScope?: ReportLanguage;
   parentKey: string;
   originalIndex?: number;
   html: string;
   textPreview: string;
   hidden: boolean;
+  outlineItems?: SectionOutlineItem[];
   editableNodes: EditableNode[];
   changed: boolean;
 }
-
+export interface SectionOutlineItem {
+  id: string;
+  label: string;
+  path: number[];
+  dynamic: boolean;
+}
 export interface ReportDocument {
   id: string;
   title: string;

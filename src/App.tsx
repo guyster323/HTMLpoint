@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState
+} from 'react';
 import type { CSSProperties } from 'react';
 import {
   addImageAnnotation,
@@ -9,6 +17,7 @@ import {
   applyTextEffect,
   applyTextStyleToNodes,
   applyImageFilter,
+  captureRuntimeTable,
   cropImage,
   deleteSection,
   deleteTableColumn,
@@ -31,8 +40,7 @@ import {
   unmergeTableCell,
   updateChartData,
   updateChartPresentation,
-  updateTranslationText,
-  withActiveLanguage
+  updateTranslationText
 } from './lib/editing';
 import {
   createAutoBackup,
@@ -41,7 +49,7 @@ import {
   saveHtml,
   saveAsHtml
 } from './lib/fileServices';
-import { acceptDroppedHtmlFile } from './lib/dropImport';
+import { acceptDroppedHtmlFile, isFileDrag } from './lib/dropImport';
 import {
   isCurrentBackupSnapshot,
   nextReportAfterSave,
@@ -50,6 +58,12 @@ import {
 } from './lib/documentActions';
 import type { PendingDocumentAction } from './lib/documentActions';
 import { clampPropertiesWidth } from './lib/uiSizing';
+import { collectExternalReportUrls, normalizeExternalPreviewUrl } from './lib/preview';
+import {
+  findFragmentPath,
+  findSectionForFragment,
+  getVisibleSections
+} from './lib/sectionNavigation';
 import { buildChangeSummaryEntries } from './lib/changeSummary';
 import {
   shouldApplyPreviewSelectionState,
@@ -117,21 +131,45 @@ export function App(): JSX.Element {
   const [selectionSnapshots, setSelectionSnapshots] = useState<Record<string, SelectionVisualSnapshot>>({});
   const [imageArrowModeNodeId, setImageArrowModeNodeId] = useState<string>();
   const [imageMosaicModeNodeId, setImageMosaicModeNodeId] = useState<string>();
+  const [previewNavigationNonce, setPreviewNavigationNonce] = useState(0);
+  const [focusedOutline, setFocusedOutline] = useState<{
+    sectionId: string;
+    path: number[];
+  }>();
   const [pendingInsertionFeedback, setPendingInsertionFeedback] = useState<{
     requestId: string;
     successMessage: string;
   }>();
   const reportRef = useRef(report);
   const insertionRequestCounterRef = useRef(0);
+  const dragDepthRef = useRef(0);
   const pendingDocumentActionRef = useRef<PendingDocumentAction | null>(null);
   const documentActionBusyRef = useRef(false);
   const pendingCancelButtonRef = useRef<HTMLButtonElement>(null);
   const changeSummaryCloseButtonRef = useRef<HTMLButtonElement>(null);
+  const clearDropOverlay = useCallback(() => {
+    dragDepthRef.current = 0;
+    setDragActive(false);
+  }, []);
   reportRef.current = report;
   const selectedSectionId = selection.sectionId;
   const selectedNodeId = selection.nodeId;
   const selectedNodeIds = selection.nodeIds;
   const selectedCell = selection.cell;
+  const focusedOutlineKey = focusedOutline
+    ? `${focusedOutline.sectionId}:${focusedOutline.path.join('.')}`
+    : undefined;
+  const previewRevision = useMemo(
+    () =>
+      report && selectedSectionId
+        ? `${report.id}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`
+        : undefined,
+    [focusedOutlineKey, previewNavigationNonce, report, selectedSectionId]
+  );
+  const previewRevisionRef = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    previewRevisionRef.current = previewRevision;
+  }, [previewRevision]);
   const changeSummaryOpen = showChangeSummary && !pendingDocumentAction;
   const changeSummaryEntries = useMemo(
     () => buildChangeSummaryEntries(changeSummaryOpen, report),
@@ -143,6 +181,17 @@ export function App(): JSX.Element {
   ) => {
     dispatchEditorSession({ type: 'commit', updateReport: updater, updateSelection });
   }, []);
+  useEffect(() => {
+    const handleWindowDragFinished = () => clearDropOverlay();
+    window.addEventListener('drop', handleWindowDragFinished, true);
+    window.addEventListener('dragend', handleWindowDragFinished, true);
+    window.addEventListener('blur', handleWindowDragFinished, true);
+    return () => {
+      window.removeEventListener('drop', handleWindowDragFinished, true);
+      window.removeEventListener('dragend', handleWindowDragFinished, true);
+      window.removeEventListener('blur', handleWindowDragFinished, true);
+    };
+  }, [clearDropOverlay]);
   const commitInsertion = useCallback((
     sectionId: string,
     insert: (current: ReportDocument) => EditResult,
@@ -223,9 +272,14 @@ export function App(): JSX.Element {
     }, 5000);
     return () => window.clearTimeout(timer);
   }, [report]);
+  const visibleSections = useMemo(() => getVisibleSections(report), [report]);
   const selectedSectionIndex = useMemo(
-    () => report?.sections.findIndex((section) => section.id === selectedSectionId) ?? -1,
-    [report?.sections, selectedSectionId]
+    () => visibleSections.findIndex((section) => section.id === selectedSectionId),
+    [selectedSectionId, visibleSections]
+  );
+  const allowedExternalUrls = useMemo(
+    () => collectExternalReportUrls(report?.sourceHtml ?? ''),
+    [report?.sourceHtml]
   );
 
   const selectedSection = useMemo(
@@ -274,6 +328,10 @@ export function App(): JSX.Element {
   useEffect(() => {
     dispatchEditorSession({ type: 'normalize-selection' });
   }, [report]);
+  useEffect(() => {
+    setImageArrowModeNodeId(undefined);
+    setImageMosaicModeNodeId(undefined);
+  }, [selectedSectionId]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -281,6 +339,148 @@ export function App(): JSX.Element {
         'iframe[title="Report preview"]'
       )?.contentWindow;
       if (event.source !== previewWindow || event.data?.source !== 'htmlpoint-preview') {
+        return;
+      }
+      if (
+        !previewRevisionRef.current ||
+        event.data.previewRevision !== previewRevisionRef.current
+      ) {
+        return;
+      }
+      if (
+        event.data.type === 'htmlpoint-select-section-node' &&
+        typeof event.data.sectionId === 'string' &&
+        typeof event.data.nodeId === 'string'
+      ) {
+        const currentReport = reportRef.current;
+        const section = getVisibleSections(currentReport).find(
+          (candidate) => candidate.id === event.data.sectionId
+        );
+        const node = section?.editableNodes.find(
+          (candidate) => candidate.id === event.data.nodeId
+        );
+        if (!section || !node) {
+          return;
+        }
+        setFocusedOutline({ sectionId: section.id, path: node.path });
+        setSelection({
+          sectionId: section.id,
+          nodeId: node.id,
+          nodeIds: [node.id],
+          cell: { row: 0, cell: 0 }
+        });
+        setMessage({
+          kind: 'status',
+          text: `‘${section.title}’(으)로 이동해 개체를 선택했습니다.`
+        });
+        return;
+      }
+      if (
+        event.data.type === 'htmlpoint-select-section-runtime' &&
+        typeof event.data.sectionId === 'string' &&
+        Array.isArray(event.data.hostPath) &&
+        event.data.hostPath.length > 0 &&
+        event.data.hostPath.length <= 128 &&
+        event.data.hostPath.every(
+          (part: unknown) => Number.isInteger(part) && Number(part) >= 0
+        )
+      ) {
+        const section = getVisibleSections(reportRef.current).find(
+          (candidate) => candidate.id === event.data.sectionId
+        );
+        if (!section) {
+          return;
+        }
+        setFocusedOutline({
+          sectionId: section.id,
+          path: event.data.hostPath as number[]
+        });
+        setSelection({
+          sectionId: section.id,
+          nodeId: undefined,
+          nodeIds: [],
+          cell: { row: 0, cell: 0 }
+        });
+        setMessage({
+          kind: 'status',
+          text: `‘${section.title}’의 동적 표로 이동했습니다. 다시 클릭하면 편집본으로 변환됩니다.`
+        });
+        return;
+      }
+      if (
+        event.data.type === 'htmlpoint-navigate-fragment' &&
+        typeof event.data.fragment === 'string' &&
+        event.data.fragment.length <= 2048
+      ) {
+        const currentReport = reportRef.current;
+        const section = currentReport && findSectionForFragment(
+          currentReport,
+          event.data.fragment,
+          currentReport.activeLanguage
+        );
+        if (!section) {
+          setMessage({ kind: 'error', text: '링크 대상 Section을 찾을 수 없습니다.' });
+          return;
+        }
+        const path = findFragmentPath(section, event.data.fragment);
+        setPreviewNavigationNonce((current) => current + 1);
+        setFocusedOutline({ sectionId: section.id, path: path ?? [] });
+        setSelection({
+          sectionId: section.id,
+          nodeId: undefined,
+          nodeIds: [],
+          cell: { row: 0, cell: 0 }
+        });
+        return;
+      }
+      if (
+        event.data.type === 'htmlpoint-open-external-link' &&
+        typeof event.data.url === 'string'
+      ) {
+        const normalizedUrl = normalizeExternalPreviewUrl(event.data.url);
+        if (!normalizedUrl || !allowedExternalUrls.has(normalizedUrl)) {
+          setMessage({ kind: 'error', text: '원본 HTML에 없는 외부 링크 요청을 차단했습니다.' });
+          return;
+        }
+        const opener = window.htmlpoint?.openExternalLink;
+        if (!opener) {
+          setMessage({ kind: 'error', text: '외부 브라우저 열기는 데스크톱 배포판에서 사용할 수 있습니다.' });
+          return;
+        }
+        void opener(normalizedUrl).catch((error: unknown) => {
+          setMessage({ kind: 'error', text: `외부 링크 열기 실패: ${errorMessage(error)}` });
+        });
+        return;
+      }
+      if (event.data.type === 'htmlpoint-link-blocked') {
+        setMessage({ kind: 'error', text: '안전하지 않거나 지원하지 않는 링크 이동을 차단했습니다.' });
+        return;
+      }
+      if (
+        event.data.type === 'htmlpoint-capture-runtime-table' &&
+        selectedSectionId &&
+        event.data.sectionId === selectedSectionId &&
+        Array.isArray(event.data.hostPath) &&
+        event.data.hostPath.length > 0 &&
+        event.data.hostPath.length <= 128 &&
+        event.data.hostPath.every(
+          (part: unknown) => Number.isInteger(part) && Number(part) >= 0
+        ) &&
+        typeof event.data.tableHtml === 'string' &&
+        event.data.tableHtml.length <= 2 * 1024 * 1024
+      ) {
+        const hostPath = event.data.hostPath as number[];
+        const tableHtml = event.data.tableHtml;
+        commitInsertion(
+          selectedSectionId,
+          (current) => captureRuntimeTable(
+            current,
+            selectedSectionId,
+            hostPath,
+            tableHtml
+          ),
+          '동적 Heatmap을 현재 화면의 정적 편집본으로 변환했습니다. 이제 Objects에서 표를 수정할 수 있습니다.'
+        );
         return;
       }
       if (
@@ -439,7 +639,7 @@ export function App(): JSX.Element {
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [commit, commitTextEdit, imageArrowModeNodeId, imageMosaicModeNodeId, selectedNodeId, selectedNodeIds, selectedSection, selectedSectionId]);
+  }, [allowedExternalUrls, commit, commitInsertion, commitTextEdit, imageArrowModeNodeId, imageMosaicModeNodeId, selectedNodeId, selectedNodeIds, selectedSection, selectedSectionId]);
 
   useEffect(() => {
     if (!resizingProperties) {
@@ -463,16 +663,20 @@ export function App(): JSX.Element {
       successMessage?: string,
       warning?: string
     ) => {
+      clearDropOverlay();
       reportRef.current = nextReport;
       dispatchEditorSession({ type: 'load', report: nextReport });
       setFitMode(true);
+      setFocusedOutline(undefined);
+      setImageArrowModeNodeId(undefined);
+      setImageMosaicModeNodeId(undefined);
       setBackupPath(backup);
       setSelectionSnapshots({});
       const loadedMessage = successMessage ?? `${nextReport.fileName ?? nextReport.title} loaded`;
       setLoadingAnnouncement(warning ? `${loadedMessage} — 경고: ${warning}` : loadedMessage);
       setMessage({ kind: warning ? 'error' : 'status', text: 'Rendering section 1…' });
     },
-    []
+    [clearDropOverlay]
   );
   const setPendingAction = useCallback((action: PendingDocumentAction | null) => {
     pendingDocumentActionRef.current = action;
@@ -604,6 +808,9 @@ export function App(): JSX.Element {
   );
   const requestDocumentAction = useCallback(
     (action: PendingDocumentAction) => {
+      if (action.type !== 'close-window') {
+        clearDropOverlay();
+      }
       if (pendingDocumentActionRef.current || documentActionBusyRef.current) {
         return;
       }
@@ -617,9 +824,10 @@ export function App(): JSX.Element {
       }
       void runDocumentAction(action, currentReport);
     },
-    [runDocumentAction, setPendingAction]
+    [clearDropOverlay, runDocumentAction, setPendingAction]
   );
   const handleOpen = useCallback(async () => {
+    clearDropOverlay();
     if (pendingDocumentActionRef.current || documentActionBusyRef.current) {
       return;
     }
@@ -635,7 +843,7 @@ export function App(): JSX.Element {
     if (opened) {
       requestDocumentAction({ type: 'opened-file', opened });
     }
-  }, [requestDocumentAction, setActionBusy]);
+  }, [clearDropOverlay, requestDocumentAction, setActionBusy]);
   const handleDroppedFiles = useCallback(
     (files: FileList | File[]) => {
       const file = Array.from(files)[0];
@@ -801,6 +1009,7 @@ export function App(): JSX.Element {
   const requireSection = useCallback(() => selectedSectionId, [selectedSectionId]);
   const requireNode = useCallback(() => selectedNodeId, [selectedNodeId]);
   const handleSelectNode = useCallback((nodeId: string, additive = false) => {
+    setFocusedOutline(undefined);
     setSelection((current) => {
       if (!additive) {
         return { ...current, nodeId, nodeIds: nodeId ? [nodeId] : [] };
@@ -896,26 +1105,41 @@ export function App(): JSX.Element {
     <div
       className={dragActive ? 'app-shell drag-active' : 'app-shell'}
       onDragEnter={(event) => {
+        if (!isFileDrag(event.dataTransfer)) {
+          return;
+        }
         event.preventDefault();
+        dragDepthRef.current += 1;
         setDragActive(true);
       }}
       onDragOver={(event) => {
+        if (!isFileDrag(event.dataTransfer)) {
+          return;
+        }
         event.preventDefault();
         event.dataTransfer.dropEffect = 'copy';
       }}
       onDragLeave={(event) => {
-        if (event.currentTarget === event.target) {
+        if (dragDepthRef.current === 0) {
+          return;
+        }
+        event.preventDefault();
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) {
           setDragActive(false);
         }
       }}
       onDrop={(event) => {
         event.preventDefault();
-        setDragActive(false);
-        void handleDroppedFiles(event.dataTransfer.files);
+        const shouldOpenFile = isFileDrag(event.dataTransfer);
+        clearDropOverlay();
+        if (shouldOpenFile) {
+          void handleDroppedFiles(event.dataTransfer.files);
+        }
       }}
     >
       {dragActive && (
-        <div className="drop-overlay">
+        <div className="drop-overlay" style={{ pointerEvents: 'auto' }}>
           <strong>Drop HTML Report</strong>
           <span>단일 HTML 파일을 열어 편집합니다.</span>
         </div>
@@ -924,7 +1148,7 @@ export function App(): JSX.Element {
         report={report}
         activeTab={activeTab}
         selectedSectionIndex={selectedSectionIndex}
-        sectionCount={report?.sections.length ?? 0}
+        sectionCount={visibleSections.length}
         sectionHidden={sectionHidden}
         selectedKind={effectiveSelectedNode?.kind}
         selectedTextStyle={effectiveSelectedNode?.textStyle}
@@ -1020,7 +1244,10 @@ export function App(): JSX.Element {
             setShowChangeSummary(true);
           }
         }}
-        onLanguageChange={(language) => commit((current) => withActiveLanguage(current, language))}
+        onLanguageChange={(language) => {
+          setFocusedOutline(undefined);
+          dispatchEditorSession({ type: 'set-language', language });
+        }}
       />
       <div
         className={workspaceClassName}
@@ -1047,9 +1274,27 @@ export function App(): JSX.Element {
         <SectionRail
           report={report}
           selectedSectionId={selectedSectionId}
-          onSelect={(sectionId) => {
+          focusedOutlineKey={
+            focusedOutlineKey
+          }
+          onSelect={(sectionId, outlinePath) => {
+            setPreviewNavigationNonce((current) => current + 1);
             const nextSection = report?.sections.find((section) => section.id === sectionId);
-            const firstNodeId = nextSection?.editableNodes[0]?.id;
+            const firstNodeId = outlinePath ? undefined : nextSection?.editableNodes[0]?.id;
+            const outlineItem = outlinePath
+              ? nextSection?.outlineItems?.find(
+                  (item) => item.path.join('.') === outlinePath.join('.')
+                )
+              : undefined;
+            setFocusedOutline(
+              outlinePath ? { sectionId, path: outlinePath } : undefined
+            );
+            if (outlineItem?.dynamic) {
+              setMessage({
+                kind: 'status',
+                text: '동적 Heatmap으로 이동했습니다. 표를 클릭하면 저장 가능한 편집본으로 변환됩니다.'
+              });
+            }
             setSelection({
               sectionId,
               nodeId: firstNodeId,
@@ -1064,6 +1309,12 @@ export function App(): JSX.Element {
           selectedSectionId={selectedSectionId}
           selectedNodeId={selectedNodeId}
           selectedNodeIds={selectedNodeIds}
+          focusPath={
+            focusedOutline && focusedOutline.sectionId === selectedSectionId
+              ? focusedOutline.path
+              : undefined
+          }
+          previewRevision={previewRevision}
           imageArrowModeNodeId={imageArrowModeNodeId}
           imageMosaicModeNodeId={imageMosaicModeNodeId}
           zoom={zoom}

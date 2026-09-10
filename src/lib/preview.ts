@@ -1,7 +1,9 @@
 import { EditableNode, ReportDocument } from '../types/htmlpoint';
+import { getElementByPath, getElementPath } from './domPaths';
 import { serializeFullDocument, stripEditorArtifacts } from './editorArtifacts';
 import { parseHtml } from './htmlParser';
 import { serializeReportHtml } from './htmlSerializer';
+import { getVisibleSections } from './sectionNavigation';
 
 export interface PreviewNodePayload {
   id: string;
@@ -9,6 +11,57 @@ export interface PreviewNodePayload {
   label: string;
   path: number[];
 }
+export interface PreviewSectionPayload {
+  id: string;
+  nodes: PreviewNodePayload[];
+}
+export function collectExternalReportUrls(html: string): Set<string> {
+  return new Set(collectExternalReportLinks(html).map(([, url]) => url));
+}
+
+function collectExternalReportLinks(html: string): Array<[string, string]> {
+  const document = parseHtml(html);
+  const links = new Map<string, string>();
+  const documentBaseUrl = normalizeExternalPreviewUrl(
+    document.querySelector<HTMLBaseElement>('base[href]')?.getAttribute('href') ?? ''
+  );
+  document.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((anchor) => {
+    const rawHref = (anchor.getAttribute('href') ?? '').trim();
+    let normalized = normalizeExternalPreviewUrl(rawHref);
+    if (!normalized && documentBaseUrl && rawHref && !rawHref.startsWith('#')) {
+      try {
+        normalized = normalizeExternalPreviewUrl(new URL(rawHref, documentBaseUrl).href);
+      } catch {
+        normalized = undefined;
+      }
+    }
+    if (normalized) {
+      links.set(rawHref, normalized);
+    }
+  });
+  return Array.from(links);
+}
+
+export function normalizeExternalPreviewUrl(value: string): string | undefined {
+  const candidate = value.trim();
+  if (!candidate || candidate.length > 2081 || /[\u0000-\u001f\u007f-\u009f]/.test(candidate)) {
+    return undefined;
+  }
+  const parseable = candidate.startsWith('//') ? `https:${candidate}` : candidate;
+  if (!/^https?:/i.test(parseable)) {
+    return undefined;
+  }
+  try {
+    const url = new URL(parseable);
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) {
+      return undefined;
+    }
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
 export function sourcePathToBaseUrl(sourcePath?: string): string | undefined {
   const source = sourcePath?.trim();
   if (!source) {
@@ -107,6 +160,13 @@ const PREVIEW_SELECTION_CSS = `
     cursor: crosshair !important;
   }
   .htmlpoint-image-mosaic-ready { cursor: crosshair !important; }
+  .htmlpoint-runtime-table {
+    cursor: copy !important;
+  }
+  .htmlpoint-runtime-table:hover {
+    outline: 3px dashed #7c3aed !important;
+    outline-offset: 4px !important;
+  }
 `;
 export function buildPreviewSelectionPayload(
   report: ReportDocument,
@@ -120,33 +180,53 @@ export function buildPreviewSelectionPayload(
     path: node.path
   }));
 }
+export function buildPreviewSectionPayloads(
+  report: ReportDocument,
+  language: string = report.activeLanguage
+): PreviewSectionPayload[] {
+  return getVisibleSections(report, language).map((section) => ({
+    id: section.id,
+    nodes: buildPreviewSelectionPayload(report, section.id)
+  }));
+}
 export function buildPreviewHtml(
   report: ReportDocument,
   selectedSectionId: string,
   language: string,
   selectedNodeId?: string,
   selectedNodeIds: string[] = selectedNodeId ? [selectedNodeId] : [],
-  sourceBaseUrl?: string
+  sourceBaseUrl?: string,
+  focusPath?: number[],
+  previewRevision: string = `${report.id}:${report.updatedAt}:${selectedSectionId}:${language}`
 ): string {
-  const selectedIndex = Math.max(
-    0,
-    report.sections.findIndex((section) => section.id === selectedSectionId)
-  );
   const nodes = buildPreviewSelectionPayload(report, selectedSectionId);
-  const base = serializeReportHtml(report).html;
+  const sectionPayloads = buildPreviewSectionPayloads(report, language);
+  const externalReportLinks = collectExternalReportLinks(report.sourceHtml);
+  const base = serializeReportHtml(report, { annotateSectionIds: true }).html;
   const initialSelectedNodeIds = Array.from(
     new Set([...(selectedNodeIds.length ? selectedNodeIds : []), selectedNodeId].filter(Boolean))
   );
   const script = `<script>
 (() => {
-  const selectedIndex = ${JSON.stringify(selectedIndex)};
-  const language = ${JSON.stringify(language)};
-  const htmlpointNodes = ${JSON.stringify(nodes)};
-  let selectedNodeId = ${JSON.stringify(selectedNodeId ?? '')};
-  let selectedNodeIds = new Set(${JSON.stringify(initialSelectedNodeIds)});
+  const previewRevision = ${jsonForInlineScript(previewRevision)};
+  const selectedSectionId = ${jsonForInlineScript(selectedSectionId)};
+  const language = ${jsonForInlineScript(language)};
+  const focusPath = ${jsonForInlineScript(focusPath ?? [])};
+  const htmlpointNodes = ${jsonForInlineScript(nodes)};
+  const htmlpointSections = ${jsonForInlineScript(sectionPayloads)};
+  const htmlpointExternalLinks = ${jsonForInlineScript(externalReportLinks)};
+  let selectedNodeId = ${jsonForInlineScript(selectedNodeId ?? '')};
+  let selectedNodeIds = new Set(${jsonForInlineScript(initialSelectedNodeIds)});
   let imageArrowModeNodeId = '';
   let imageMosaicModeNodeId = '';
   let marquee = null;
+  function postToEditor(payload) {
+    window.parent.postMessage({
+      source: 'htmlpoint-preview',
+      previewRevision,
+      ...payload
+    }, '*');
+  }
   function elementByPath(root, path) {
     return path.reduce((current, index) => current && current.children ? current.children[index] : null, root);
   }
@@ -261,14 +341,13 @@ export function buildPreviewHtml(
     const snapshot = node && (target instanceof HTMLElement || target instanceof SVGElement)
       ? selectionSnapshot(node, target)
       : undefined;
-    window.parent.postMessage({
-      source: 'htmlpoint-preview',
+    postToEditor({
       type,
       nodeId,
       selectedNodeIds: Array.from(selectedNodeIds),
       snapshot,
       ...extra
-    }, '*');
+    });
   }
   function beginInlineTextEdit(element, node, event) {
     if (!(element instanceof HTMLElement)) return;
@@ -302,12 +381,11 @@ export function buildPreviewHtml(
       closed = true;
       const text = element.textContent || '';
       cleanup();
-      window.parent.postMessage({
-        source: 'htmlpoint-preview',
+      postToEditor({
         type: 'htmlpoint-edit-text',
         nodeId: node.id,
         text
-      }, '*');
+      });
     };
     const cancel = () => {
       if (closed) return;
@@ -358,7 +436,7 @@ export function buildPreviewHtml(
       if (node.kind === 'image' && corner === 'se') {
         let resizing = false;
         const beginResize = (event) => {
-          if (resizing) return;
+          if (resizing || !event.isTrusted) return;
           resizing = true;
           event.preventDefault();
           event.stopPropagation();
@@ -378,13 +456,12 @@ export function buildPreviewHtml(
             resizing = false;
             const width = Math.max(24, Math.round(start.width + finishEvent.clientX - startX));
             const height = Math.max(24, Math.round(start.height + finishEvent.clientY - startY));
-            window.parent.postMessage({
-              source: 'htmlpoint-preview',
+            postToEditor({
               type: hasFrame ? 'htmlpoint-resize-image-frame' : 'htmlpoint-resize-image',
               nodeId: node.id,
               width,
               height
-            }, '*');
+            });
             try {
               if (pointerId !== undefined) handle.releasePointerCapture(pointerId);
             } catch (_error) {
@@ -407,8 +484,24 @@ export function buildPreviewHtml(
       overlay.appendChild(handle);
     });
   }
+  function sectionElement(sectionId) {
+    return Array.from(document.querySelectorAll('[data-htmlpoint-preview-section]'))
+      .find((element) => element.getAttribute('data-htmlpoint-preview-section') === sectionId);
+  }
   function selectedSlideElement() {
-    return document.querySelectorAll('header, section')[selectedIndex];
+    return sectionElement(selectedSectionId);
+  }
+
+  function elementForNode(sectionId, node) {
+    const slide = sectionElement(sectionId);
+    if (!(slide instanceof HTMLElement)) return null;
+    const marked = Array.from(
+      slide.querySelectorAll('[data-htmlpoint-node-id][data-htmlpoint-section-id]')
+    ).find((element) =>
+      element.getAttribute('data-htmlpoint-node-id') === node.id &&
+      element.getAttribute('data-htmlpoint-section-id') === sectionId
+    );
+    return marked || elementByPath(slide, node.path);
   }
 
   function revealTarget(element) {
@@ -421,8 +514,7 @@ export function buildPreviewHtml(
   }
   function nodeElement(nodeId) {
     const node = htmlpointNodes.find((entry) => entry.id === nodeId);
-    const selectedSlide = selectedSlideElement();
-    const target = node && selectedSlide ? elementByPath(selectedSlide, node.path) : null;
+    const target = node ? elementForNode(selectedSectionId, node) : null;
     return { node, target };
   }
   function paintSelections() {
@@ -532,17 +624,16 @@ export function buildPreviewHtml(
   function addImageArrowDrawing(element, node) {
     if (!(element instanceof HTMLImageElement)) return;
     element.addEventListener('pointerdown', (event) => {
-      if (imageArrowModeNodeId !== node.id) return;
+      if (!event.isTrusted || imageArrowModeNodeId !== node.id) return;
       event.preventDefault();
       event.stopPropagation();
       if (!isImageArrowEligible(element)) {
         imageArrowModeNodeId = '';
         updateImageArrowMode();
-        window.parent.postMessage({
-          source: 'htmlpoint-preview',
+        postToEditor({
           type: 'htmlpoint-image-arrow-rejected',
           nodeId: node.id
-        }, '*');
+        });
         return;
       }
       const rect = element.getBoundingClientRect();
@@ -571,15 +662,14 @@ export function buildPreviewHtml(
         }
         imageArrowModeNodeId = '';
         updateImageArrowMode();
-        window.parent.postMessage({
-          source: 'htmlpoint-preview',
+        postToEditor({
           type: 'htmlpoint-add-image-arrow',
           nodeId: node.id,
           startX: start.x,
           startY: start.y,
           endX: end.x,
           endY: end.y
-        }, '*');
+        });
       };
       window.addEventListener('pointermove', update);
       window.addEventListener('pointerup', finish, { once: true });
@@ -594,11 +684,11 @@ export function buildPreviewHtml(
   function addImageMosaicDrawing(element, node) {
     if (!(element instanceof HTMLImageElement)) return;
     element.addEventListener('pointerdown', (event) => {
-      if (imageMosaicModeNodeId !== node.id) return;
+      if (!event.isTrusted || imageMosaicModeNodeId !== node.id) return;
       event.preventDefault(); event.stopPropagation();
       if (!isImageArrowEligible(element)) {
         imageMosaicModeNodeId = ''; updateImageMosaicMode();
-        window.parent.postMessage({ source: 'htmlpoint-preview', type: 'htmlpoint-image-arrow-rejected', nodeId: node.id }, '*');
+        postToEditor({ type: 'htmlpoint-image-arrow-rejected', nodeId: node.id });
         return;
       }
       const rect = element.getBoundingClientRect();
@@ -616,8 +706,8 @@ export function buildPreviewHtml(
       const finish = (finishEvent) => {
         const end = normalizedArrowPosition(finishEvent, rect); box.remove(); window.removeEventListener('pointermove', update);
         imageMosaicModeNodeId = ''; updateImageMosaicMode();
-        window.parent.postMessage({ source: 'htmlpoint-preview', type: 'htmlpoint-add-image-mosaic', nodeId: node.id,
-          left: Math.min(start.x, end.x), top: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) }, '*');
+        postToEditor({ type: 'htmlpoint-add-image-mosaic', nodeId: node.id,
+          left: Math.min(start.x, end.x), top: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) });
       };
       window.addEventListener('pointermove', update); window.addEventListener('pointerup', finish, { once: true }); update(event);
     });
@@ -685,25 +775,159 @@ export function buildPreviewHtml(
     document.addEventListener('pointermove', updateMarquee);
     document.addEventListener('pointerup', finishMarquee, { once: true });
   }
-  requestAnimationFrame(() => {
+
+  document.addEventListener('click', (event) => {
+    if (!event.isTrusted) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const anchor = target && target.closest('a[href]');
+    if (!(anchor instanceof HTMLAnchorElement)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const rawHref = (anchor.getAttribute('href') || '').trim();
+    if (rawHref.startsWith('#')) {
+      postToEditor({
+        type: 'htmlpoint-navigate-fragment',
+        fragment: rawHref
+      });
+      return;
+    }
+    const configuredUrl = htmlpointExternalLinks.find((entry) => entry[0] === rawHref)?.[1];
+    if (configuredUrl) {
+      postToEditor({
+        type: 'htmlpoint-open-external-link',
+        url: configuredUrl
+      });
+      return;
+    }
+    try {
+      const parseableHref = rawHref.startsWith('//') ? 'https:' + rawHref : rawHref;
+      const url = new URL(parseableHref);
+      if (url.protocol === 'http:' || url.protocol === 'https:') {
+        postToEditor({
+          type: 'htmlpoint-open-external-link',
+          url: url.href
+        });
+        return;
+      }
+    } catch (_error) {
+      // Invalid and relative-to-opaque links stay inside the editor.
+    }
+    postToEditor({
+      type: 'htmlpoint-link-blocked',
+      href: rawHref
+    });
+  }, true);
+
+  function wireSectionObjects() {
+    htmlpointSections.forEach((section) => {
+      const slide = sectionElement(section.id);
+      if (!(slide instanceof HTMLElement)) return;
+      section.nodes.forEach((node) => {
+        const element = elementForNode(section.id, node);
+        if (!(element instanceof HTMLElement) && !(element instanceof SVGElement)) return;
+        element.classList.add('htmlpoint-preview-node');
+        element.setAttribute('data-htmlpoint-node-id', node.id);
+        element.setAttribute('data-htmlpoint-section-id', section.id);
+        element.setAttribute(
+          'title',
+          (section.id === selectedSectionId ? '' : 'Section 이동 · ') +
+            node.kind.toUpperCase() + ' · ' + node.label
+        );
+      });
+    });
+  }
+
+  document.addEventListener('click', (event) => {
+    if (!event.isTrusted) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('[data-htmlpoint-runtime-wired="true"]')) return;
+    const object = target && target.closest('[data-htmlpoint-node-id][data-htmlpoint-section-id]');
+    if (!(object instanceof Element)) return;
+    const sectionId = object.getAttribute('data-htmlpoint-section-id') || '';
+    const nodeId = object.getAttribute('data-htmlpoint-node-id') || '';
+    if (!sectionId || sectionId === selectedSectionId || !nodeId) return;
+    const section = htmlpointSections.find((entry) => entry.id === sectionId);
+    if (!section || !section.nodes.some((node) => node.id === nodeId)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    postToEditor({
+      type: 'htmlpoint-select-section-node',
+      sectionId,
+      nodeId
+    });
+  }, true);
+
+  function wireRuntimeTables(sectionId, slide) {
+    slide.querySelectorAll('table').forEach((table) => {
+      if (table.hasAttribute('data-htmlpoint-node-id') || table.dataset.htmlpointRuntimeWired === 'true') return;
+      const sourceHost = table.parentElement && table.parentElement.closest('[data-htmlpoint-source-path]');
+      const encodedPath = sourceHost && sourceHost.getAttribute('data-htmlpoint-source-path');
+      if (!encodedPath) return;
+      const hostPath = encodedPath.split('.').filter(Boolean).map(Number);
+      if (!hostPath.every((part) => Number.isInteger(part) && part >= 0)) return;
+      table.dataset.htmlpointRuntimeWired = 'true';
+      table.classList.add('htmlpoint-runtime-table');
+      table.setAttribute(
+        'title',
+        sectionId === selectedSectionId
+          ? '동적 표 · 클릭하여 정적 편집본으로 변환'
+          : '동적 표 · 클릭하여 해당 Section으로 이동'
+      );
+      table.addEventListener('click', (event) => {
+        if (!event.isTrusted) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (sectionId !== selectedSectionId) {
+          postToEditor({
+            type: 'htmlpoint-select-section-runtime',
+            sectionId,
+            hostPath
+          });
+          return;
+        }
+        postToEditor({
+          type: 'htmlpoint-capture-runtime-table',
+          sectionId,
+          hostPath,
+          tableHtml: table.outerHTML
+        });
+      }, true);
+    });
+  }
+
+  function initializePreview() {
     document.documentElement.style.overflow = 'auto';
+    document.documentElement.style.scrollBehavior = 'auto';
     document.body.style.overflow = 'auto';
+    document.body.style.scrollBehavior = 'auto';
     const langButton = document.querySelector('[data-lang="' + language + '"]');
-    if (langButton instanceof HTMLElement) langButton.click();
-    const slides = Array.from(document.querySelectorAll('header, section'));
-    const selected = slides[selectedIndex];
+    if (langButton instanceof HTMLElement) {
+      langButton.click();
+      window.scrollTo({ left: window.scrollX, top: window.scrollY, behavior: 'auto' });
+    }
+    wireSectionObjects();
+    const wireAllRuntimeTables = () => {
+      htmlpointSections.forEach((section) => {
+        const slide = sectionElement(section.id);
+        if (slide instanceof HTMLElement) wireRuntimeTables(section.id, slide);
+      });
+    };
+    wireAllRuntimeTables();
+    const runtimeObserver = new MutationObserver(wireAllRuntimeTables);
+    runtimeObserver.observe(document.body, { childList: true, subtree: true });
+    const selected = selectedSlideElement();
     if (selected instanceof HTMLElement) {
       selected.style.outline = '3px solid #0f6cbd';
       selected.style.outlineOffset = '4px';
-      selected.scrollIntoView({ block: 'center', inline: 'nearest' });
       selected.addEventListener('pointerdown', beginMarquee);
       htmlpointNodes.forEach((node) => {
-        const element = elementByPath(selected, node.path);
+        const element = elementForNode(selectedSectionId, node);
         if (element instanceof HTMLElement || element instanceof SVGElement) {
           element.classList.add('htmlpoint-preview-node');
           element.setAttribute('data-htmlpoint-node-id', node.id);
           element.setAttribute('title', node.kind.toUpperCase() + ' · ' + node.label);
           element.addEventListener('click', (event) => {
+            if (!event.isTrusted) return;
             event.preventDefault();
             event.stopPropagation();
             if (event.detail >= 2) {
@@ -712,7 +936,9 @@ export function buildPreviewHtml(
             }
             selectNode(node.id, true, event.ctrlKey || event.metaKey);
           });
-          element.addEventListener('dblclick', (event) => beginInlineTextEdit(element, node, event));
+          element.addEventListener('dblclick', (event) => {
+            if (event.isTrusted) beginInlineTextEdit(element, node, event);
+          });
           if (node.kind === 'image') {
             addImageArrowDrawing(element, node);
             addImageMosaicDrawing(element, node);
@@ -721,6 +947,18 @@ export function buildPreviewHtml(
       });
       updateImageArrowMode();
       updateImageMosaicMode();
+      const markedFocusTarget = selected.querySelector('[data-htmlpoint-focus-target="true"]');
+      const focusTarget = markedFocusTarget || (focusPath.length ? elementByPath(selected, focusPath) : selected);
+      let focusDetails = focusTarget instanceof Element ? focusTarget.closest('details') : null;
+      while (focusDetails instanceof HTMLDetailsElement) {
+        focusDetails.open = true;
+        focusDetails = focusDetails.parentElement?.closest('details') ?? null;
+      }
+      if (focusTarget instanceof HTMLElement || focusTarget instanceof SVGElement) {
+        focusTarget.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } else {
+        selected.scrollIntoView({ block: 'center', inline: 'nearest' });
+      }
       if (selectedNodeId || selectedNodeIds.size) {
         paintSelections();
         if (selectedNodeId) {
@@ -728,11 +966,45 @@ export function buildPreviewHtml(
         }
       }
     }
-  });
+  }
+  requestAnimationFrame(() => requestAnimationFrame(initializePreview));
 })();
 </script>`;
   const document = parseHtml(base);
+  const serializedSections = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-htmlpoint-serialized-section]')
+  ).map((element) => ({
+    element,
+    sectionId: element.dataset.htmlpointSerializedSection ?? ''
+  }));
   stripEditorArtifacts(document);
+  const visibleSectionIds = new Set(sectionPayloads.map((section) => section.id));
+  const payloadBySectionId = new Map(
+    sectionPayloads.map((section) => [section.id, section] as const)
+  );
+  serializedSections.forEach(({ element: slide, sectionId }) => {
+    if (!sectionId || !visibleSectionIds.has(sectionId)) {
+      return;
+    }
+    slide.dataset.htmlpointPreviewSection = sectionId;
+    slide.querySelectorAll<HTMLElement>('*').forEach((element) => {
+      element.dataset.htmlpointSourcePath = getElementPath(slide, element).join('.');
+    });
+    payloadBySectionId.get(sectionId)?.nodes.forEach((node) => {
+      const element = getElementByPath(slide, node.path);
+      if (!(element instanceof HTMLElement) && !(element instanceof SVGElement)) {
+        return;
+      }
+      element.dataset.htmlpointNodeId = node.id;
+      element.dataset.htmlpointSectionId = sectionId;
+    });
+    if (sectionId === selectedSectionId && focusPath?.length) {
+      const focusTarget = getElementByPath(slide, focusPath);
+      if (focusTarget instanceof HTMLElement || focusTarget instanceof SVGElement) {
+        focusTarget.dataset.htmlpointFocusTarget = 'true';
+      }
+    }
+  });
   if (sourceBaseUrl) {
     const baseElement = document.createElement('base');
     baseElement.dataset.htmlpointPreviewBase = 'true';
@@ -754,6 +1026,13 @@ export function buildPreviewHtml(
   }
 
   return serializeFullDocument(document);
+}
+
+function jsonForInlineScript(value: unknown): string {
+  return (JSON.stringify(value) ?? 'null')
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 export function buildThumbnailHtml(sectionHtml: string): string {
   const document = parseHtml(`<!doctype html><html><head><style>

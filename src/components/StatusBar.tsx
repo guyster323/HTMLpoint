@@ -1,4 +1,5 @@
 import { Minus, Plus } from 'lucide-react';
+import { getVisibleSections } from '../lib/sectionNavigation';
 import { ReportDocument } from '../types/htmlpoint';
 
 interface StatusBarProps {
@@ -20,13 +21,14 @@ export function StatusBar({
   onZoomChange,
   onFit
 }: StatusBarProps): JSX.Element {
-  const wordCount = report
-    ? report.sections.reduce((total, section) => total + section.textPreview.split(/\s+/).filter(Boolean).length, 0)
-    : 0;
-
+  const visibleSections = getVisibleSections(report);
+  const wordCount = visibleSections.reduce(
+    (total, section) => total + section.textPreview.split(/\s+/).filter(Boolean).length,
+    0
+  );
   return (
     <footer className="status-bar">
-      <span>{report ? `Section ${selectedIndex + 1} of ${report.sections.length}` : 'No document'}</span>
+      <span>{report ? `Section ${selectedIndex + 1} of ${visibleSections.length}` : 'No document'}</span>
       <span>{wordCount.toLocaleString()} words</span>
       <span>{report?.activeLanguage ? `${report.activeLanguage.toUpperCase()}` : '—'}</span>
       <span>{report ? (report.dirty ? 'Modified' : 'Saved') : 'No document'}</span>

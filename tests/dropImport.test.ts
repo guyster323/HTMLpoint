@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { acceptDroppedHtmlFile, hasRelativeAssetReference, isAcceptedHtmlFile } from '../src/lib/dropImport';
-
+import {
+  acceptDroppedHtmlFile,
+  hasRelativeAssetReference,
+  isAcceptedHtmlFile,
+  isFileDrag
+} from '../src/lib/dropImport';
 describe('HTML drag and drop import', () => {
+  it('activates the report drop target only for native file transfers', () => {
+    expect(isFileDrag({ types: ['Files'], files: [] })).toBe(true);
+    expect(isFileDrag({ types: [], files: [{}] })).toBe(true);
+    expect(isFileDrag({ types: ['text/plain'], files: [] })).toBe(false);
+    expect(isFileDrag(undefined)).toBe(false);
+  });
   it('accepts .html/.htm files and rejects other files', () => {
     expect(isAcceptedHtmlFile({ name: 'report.html', type: 'text/html' })).toBe(true);
     expect(isAcceptedHtmlFile({ name: 'report.htm', type: '' })).toBe(true);

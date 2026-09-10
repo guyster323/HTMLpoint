@@ -5,6 +5,21 @@ export interface FileLike {
   type?: string;
 }
 
+export interface DragDataTransferLike {
+  types?: ArrayLike<string>;
+  files?: ArrayLike<unknown>;
+}
+
+export function isFileDrag(dataTransfer: DragDataTransferLike | null | undefined): boolean {
+  if (!dataTransfer) {
+    return false;
+  }
+  return (
+    Array.from(dataTransfer.types ?? []).some((type) => type.toLowerCase() === 'files') ||
+    Boolean(dataTransfer.files?.length)
+  );
+}
+
 export function isAcceptedHtmlFile(file: FileLike): boolean {
   const name = file.name.toLowerCase();
   return name.endsWith('.html') || name.endsWith('.htm') || file.type === 'text/html';

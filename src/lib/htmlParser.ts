@@ -31,6 +31,7 @@ const TEXT_SELECTOR = [
   'th',
   'figcaption',
   'caption',
+  'summary',
   'blockquote',
   'button',
   'a',
@@ -115,6 +116,9 @@ export function parseReportHtml(html: string, options: ParseOptions = {}): Repor
   const strippedEditorArtifacts = stripEditorArtifacts(document);
   const translations = extractTranslations(document);
   const languages = detectLanguages(document);
+  const activePaneLanguage = document
+    .querySelector<HTMLElement>('[data-report-lang].active')
+    ?.dataset.reportLang?.trim();
   const slideElements = getSlideElements(document);
   const sections = slideElements.map((element, index) =>
     parseSectionElement(document, element, index, translations)
@@ -129,7 +133,8 @@ export function parseReportHtml(html: string, options: ParseOptions = {}): Repor
     sections,
     assets: collectAssets(sections),
     languages,
-    activeLanguage: languages[0] ?? document.documentElement.lang ?? 'ko',
+    activeLanguage:
+      activePaneLanguage ?? languages[0] ?? document.documentElement.lang ?? 'ko',
     translations,
     operations: [],
     dirty: false,
@@ -159,6 +164,7 @@ export function parseSectionHtml(
       element.hasAttribute('hidden') ||
       element.dataset.htmlpointHidden === 'true' ||
       element.style.display === 'none',
+    outlineItems: collectSectionOutlineItems(element),
     editableNodes: collectEditableNodes(element, section.id, translations)
   };
 }
@@ -174,6 +180,8 @@ export function parseSectionElement(
     id,
     kind: getSectionKind(element),
     title: getSectionTitle(element, index),
+    sourceId: element.id || undefined,
+    languageScope: getSectionLanguageScope(element),
     parentKey: element.parentElement ? getParentKey(document, element.parentElement) : 'body',
     originalIndex: index,
     html: element.outerHTML,
@@ -222,8 +230,10 @@ export function detectLanguages(document: Document): ReportLanguage[] {
     found.add(htmlLang);
   }
 
-  document.querySelectorAll<HTMLElement>('[data-lang]').forEach((element) => {
-    const lang = element.dataset.lang?.trim();
+  document
+    .querySelectorAll<HTMLElement>('[data-lang], [data-report-lang]')
+    .forEach((element) => {
+    const lang = (element.dataset.reportLang || element.dataset.lang)?.trim();
     if (lang) {
       found.add(lang);
     }
@@ -232,6 +242,36 @@ export function detectLanguages(document: Document): ReportLanguage[] {
   return Array.from(found.size ? found : new Set(['ko']));
 }
 
+function getSectionLanguageScope(element: HTMLElement): ReportLanguage | undefined {
+  const languageContainer = element.closest<HTMLElement>('[data-report-lang]');
+  return languageContainer?.dataset.reportLang?.trim() || undefined;
+}
+
+function collectSectionOutlineItems(sectionElement: HTMLElement): ReportSection['outlineItems'] {
+  return Array.from(sectionElement.querySelectorAll<HTMLDetailsElement>('details'))
+    .map((details, index) => {
+      const summary = details.querySelector<HTMLElement>(':scope > summary');
+      const visualHost =
+        details.querySelector<HTMLElement>('table, svg, canvas, img') ??
+        Array.from(details.querySelectorAll<HTMLElement>('[class], [id]')).find(
+          (element) => /(?:heatmap|chart|graph)/i.test(`${element.id} ${element.className}`)
+        );
+      if (!summary || !visualHost) {
+        return undefined;
+      }
+      const label = summary.textContent?.replace(/\s+/g, ' ').trim();
+      if (!label) {
+        return undefined;
+      }
+      return {
+        id: `outline-${index + 1}`,
+        label,
+        path: getElementPath(sectionElement, details),
+        dynamic: !details.querySelector('table, svg, canvas, img')
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+}
 export function collectEditableNodes(
   sectionElement: HTMLElement,
   sectionId: string,

@@ -6,8 +6,13 @@ interface SlideGroup {
   key: string;
   elements: HTMLElement[];
 }
-
-export function serializeReportHtml(report: ReportDocument): SaveResult {
+interface SerializeReportOptions {
+  annotateSectionIds?: boolean;
+}
+export function serializeReportHtml(
+  report: ReportDocument,
+  options: SerializeReportOptions = {}
+): SaveResult {
   const document = parseHtml(report.sourceHtml);
   stripEditorArtifacts(document);
   const groups = groupSlideElements(document);
@@ -45,7 +50,11 @@ export function serializeReportHtml(report: ReportDocument): SaveResult {
             element.style.display = '';
           }
         }
-        parent.insertBefore(document.importNode(element, true), marker);
+        const importedElement = document.importNode(element, true);
+        if (options.annotateSectionIds) {
+          importedElement.dataset.htmlpointSerializedSection = section.id;
+        }
+        parent.insertBefore(importedElement, marker);
       });
 
     marker.remove();

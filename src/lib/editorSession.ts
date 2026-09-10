@@ -1,4 +1,5 @@
 import type { EditResult, ReportDocument, ReportSection } from '../types/htmlpoint';
+import { findSectionForLanguage, getVisibleSections } from './sectionNavigation';
 
 export interface EditorSelection {
   sectionId?: string;
@@ -55,6 +56,7 @@ export type EditorSessionAction =
       savedReport: ReportDocument;
     }
   | { type: 'select'; updateSelection: EditorSelectionUpdater }
+  | { type: 'set-language'; language: string }
   | { type: 'normalize-selection' }
   | {
       type: 'commit';
@@ -125,6 +127,27 @@ export function editorSessionReducer(
     case 'select': {
       const selection = resolveSelectionUpdate(action.updateSelection, state.selection);
       return selection === state.selection ? state : { ...state, selection };
+    }
+    case 'set-language': {
+      if (!state.report || state.report.activeLanguage === action.language) {
+        return state;
+      }
+      const section = findSectionForLanguage(
+        state.report,
+        state.selection.sectionId,
+        action.language
+      );
+      const nodeId = section?.editableNodes[0]?.id;
+      return {
+        ...state,
+        report: { ...state.report, activeLanguage: action.language },
+        selection: {
+          sectionId: section?.id,
+          nodeId,
+          nodeIds: nodeId ? [nodeId] : [],
+          cell: { row: 0, cell: 0 }
+        }
+      };
     }
     case 'normalize-selection': {
       const selection = normalizeSelection(state.report, state.selection);
@@ -284,8 +307,9 @@ export function normalizeSelection(
     return current;
   }
 
-  const currentSection = report.sections.find((section) => section.id === current.sectionId);
-  const section = currentSection ?? report.sections[0];
+  const visibleSections = getVisibleSections(report);
+  const currentSection = visibleSections.find((section) => section.id === current.sectionId);
+  const section = currentSection ?? visibleSections[0] ?? report.sections[0];
   if (!section) {
     return isEmptySelection(current) ? current : emptySelection();
   }

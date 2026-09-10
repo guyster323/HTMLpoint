@@ -1,21 +1,31 @@
 import { EyeOff, Plus, Rows3 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { buildThumbnailHtml } from '../lib/preview';
+import { getVisibleSections } from '../lib/sectionNavigation';
 import { ReportDocument } from '../types/htmlpoint';
 
 interface SectionRailProps {
   report: ReportDocument | null;
   selectedSectionId?: string;
-  onSelect: (sectionId: string) => void;
+  focusedOutlineKey?: string;
+  onSelect: (sectionId: string, outlinePath?: number[]) => void;
   onDuplicate: () => void;
 }
 
 export function SectionRail({
   report,
   selectedSectionId,
+  focusedOutlineKey,
   onSelect,
   onDuplicate
 }: SectionRailProps): JSX.Element {
+  const activeSectionRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const activeSection = activeSectionRef.current;
+    if (typeof activeSection?.scrollIntoView === 'function') {
+      activeSection.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedSectionId]);
   return (
     <aside className="section-rail">
       <div className="rail-head">
@@ -26,17 +36,35 @@ export function SectionRail({
       </div>
       <div className="thumbnail-list">
         {report ? (
-          report.sections.map((section, index) => (
-            <button
-              type="button"
-              className={section.id === selectedSectionId ? 'thumbnail active' : 'thumbnail'}
-              key={section.id}
-              onClick={() => onSelect(section.id)}
-            >
-              <span className="thumb-index">{index + 1}</span>
-              <ThumbnailCard sectionHtml={section.html} index={index} hidden={section.hidden} eager={section.id === selectedSectionId || index < 2} />
-              <span className="thumb-title">{section.title}</span>
-            </button>
+          getVisibleSections(report).map((section, index) => (
+            <div className="section-entry" key={section.id}>
+              <button
+                type="button"
+                ref={section.id === selectedSectionId ? activeSectionRef : undefined}
+                className={section.id === selectedSectionId ? 'thumbnail active' : 'thumbnail'}
+                onClick={() => onSelect(section.id)}
+              >
+                <span className="thumb-index">{index + 1}</span>
+                <ThumbnailCard sectionHtml={section.html} index={index} hidden={section.hidden} eager={section.id === selectedSectionId || index < 2} />
+                <span className="thumb-title">{section.title}</span>
+              </button>
+              {section.outlineItems?.map((item) => {
+                const outlineKey = `${section.id}:${item.path.join('.')}`;
+                return (
+                  <button
+                    type="button"
+                    className={outlineKey === focusedOutlineKey ? 'section-outline active' : 'section-outline'}
+                    key={item.id}
+                    onClick={() => onSelect(section.id, item.path)}
+                    title={item.dynamic ? '실행 후 생성되는 구성요소로 이동' : item.label}
+                  >
+                    <span aria-hidden="true">↳</span>
+                    <span>{item.label}</span>
+                    {item.dynamic && <small>동적</small>}
+                  </button>
+                );
+              })}
+            </div>
           ))
         ) : (
           <div className="empty-rail">

@@ -4,6 +4,12 @@ const EDITOR_MARKERS = [
   'htmlpoint-selection-overlay',
   'htmlpoint-select-handle',
   'htmlpoint-marquee',
+  'htmlpoint-runtime-table',
+  'htmlpoint-source-path',
+  'htmlpoint-section-id',
+  'htmlpoint-preview-section',
+  'htmlpoint-serialized-section',
+  'htmlpoint-focus-target',
   'htmlpoint-preview'
 ];
 
@@ -18,7 +24,8 @@ const EDITOR_CLASSES = [
   'htmlpoint-select-handle-ne',
   'htmlpoint-select-handle-sw',
   'htmlpoint-select-handle-se',
-  'htmlpoint-marquee'
+  'htmlpoint-marquee',
+  'htmlpoint-runtime-table'
 ];
 
 export function stripEditorArtifacts(document: Document): boolean {
@@ -35,9 +42,16 @@ export function stripEditorArtifacts(document: Document): boolean {
       changed = true;
     }
   });
-
-  document.querySelectorAll<HTMLElement>('[data-htmlpoint-node-id]').forEach((element) => {
+  document.querySelectorAll<HTMLElement>(
+    '[data-htmlpoint-node-id], [data-htmlpoint-section-id], [data-htmlpoint-preview-section], [data-htmlpoint-serialized-section], [data-htmlpoint-source-path], [data-htmlpoint-focus-target], [data-htmlpoint-runtime-wired]'
+  ).forEach((element) => {
     element.removeAttribute('data-htmlpoint-node-id');
+    element.removeAttribute('data-htmlpoint-section-id');
+    element.removeAttribute('data-htmlpoint-preview-section');
+    element.removeAttribute('data-htmlpoint-serialized-section');
+    element.removeAttribute('data-htmlpoint-source-path');
+    element.removeAttribute('data-htmlpoint-focus-target');
+    element.removeAttribute('data-htmlpoint-runtime-wired');
     changed = true;
   });
 

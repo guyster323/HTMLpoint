@@ -546,7 +546,171 @@ describe('interactive UI behavior helpers', () => {
       harness.dispose();
     }
   });
+  it('shows the drop overlay only for files and balances drag transitions across child elements', async () => {
+    const harness = renderAppHarness();
+
+    try {
+      await harness.openReport(openedReport('first.html', 'First report'));
+      const preview = harness.container.querySelector<HTMLIFrameElement>(
+        'iframe[title="Report preview"]'
+      )!;
+      dispatchDragEvent(preview, 'dragenter', { types: ['text/plain'], files: [] });
+      expect(harness.container.querySelector('.drop-overlay')).toBeNull();
+
+      const transfer = {
+        types: ['Files'],
+        files: [new File(['<section>Second</section>'], 'second.html', { type: 'text/html' })]
+      };
+      dispatchDragEvent(preview, 'dragenter', transfer);
+      const overlay = harness.container.querySelector<HTMLElement>('.drop-overlay')!;
+      expect(overlay).not.toBeNull();
+      expect(overlay.style.pointerEvents).toBe('auto');
+
+      dispatchDragEvent(overlay, 'dragenter', transfer);
+      dispatchDragEvent(preview, 'dragleave', transfer);
+      expect(harness.container.querySelector('.drop-overlay')).not.toBeNull();
+      dispatchDragEvent(overlay, 'dragleave', transfer);
+      expect(harness.container.querySelector('.drop-overlay')).toBeNull();
+    } finally {
+      harness.dispose();
+    }
+  });
+  it('switches Sections and preserves the object when another preview Section is clicked', async () => {
+    const harness = renderAppHarness();
+
+    try {
+      await harness.openReport({
+        fileName: 'two-sections.html',
+        filePath: 'C:\\reports\\two-sections.html',
+        html: `<!doctype html><html><body>
+          <section><h2>First Section</h2><p>First object</p></section>
+          <section><h2>Second Section</h2><p>Target object</p></section>
+        </body></html>`
+      });
+      const preview = harness.container.querySelector<HTMLIFrameElement>(
+        'iframe[title="Report preview"]'
+      )!;
+      const previewRevision = preview.dataset.previewRevision;
+      expect(previewRevision).toBeTruthy();
+      act(() => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: preview.contentWindow,
+          data: {
+            source: 'htmlpoint-preview',
+            previewRevision: `${previewRevision}-stale`,
+            type: 'htmlpoint-select-section-node',
+            sectionId: 'section-2',
+            nodeId: 'section-2:text:1'
+          }
+        }));
+      });
+      expect(
+        harness.container.querySelector('.canvas-toolbar strong')?.textContent
+      ).toBe('First Section');
+
+      act(() => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: preview.contentWindow,
+          data: {
+            source: 'htmlpoint-preview',
+            previewRevision,
+            type: 'htmlpoint-select-section-node',
+            sectionId: 'section-2',
+            nodeId: 'section-2:text:1'
+          }
+        }));
+      });
+
+      expect(
+        harness.container.querySelector('.canvas-toolbar strong')?.textContent
+      ).toBe('Second Section');
+      expect(
+        harness.container.querySelector('.thumbnail.active .thumb-title')?.textContent
+      ).toBe('Second Section');
+      expect(
+        harness.container.querySelector('.object-chip.active')?.textContent
+      ).toContain('Target object');
+      expect(harness.container.textContent).toContain(
+        '‘Second Section’(으)로 이동해 개체를 선택했습니다.'
+      );
+    } finally {
+      harness.dispose();
+    }
+  });
+  it('reissues preview navigation when the active Section is clicked again', async () => {
+    const harness = renderAppHarness();
+
+    try {
+      await harness.openReport({
+        fileName: 'same-section.html',
+        filePath: 'C:\\reports\\same-section.html',
+        html: '<!doctype html><html><body><section><h2>Same Section</h2><p>Object</p></section></body></html>'
+      });
+      const preview = harness.container.querySelector<HTMLIFrameElement>(
+        'iframe[title="Report preview"]'
+      )!;
+      const firstRevision = preview.dataset.previewRevision;
+
+      act(() => {
+        harness.container.querySelector<HTMLButtonElement>('.thumbnail.active')?.click();
+      });
+
+      expect(preview.dataset.previewRevision).toBeTruthy();
+      expect(preview.dataset.previewRevision).not.toBe(firstRevision);
+    } finally {
+      harness.dispose();
+    }
+  });
+  it('clears stale drop state on window safety events and every file-open attempt', async () => {
+    const harness = renderAppHarness();
+    const transfer = {
+      types: ['Files'],
+      files: [new File([
+        '<!doctype html><html><body><section><h1>Dropped report</h1></section></body></html>'
+      ], 'dropped.html', { type: 'text/html' })]
+    };
+
+    try {
+      await harness.openReport(openedReport('first.html', 'First report'));
+      const appShell = harness.container.querySelector<HTMLElement>('.app-shell')!;
+      dispatchDragEvent(appShell, 'dragenter', transfer);
+      expect(harness.container.querySelector('.drop-overlay')).not.toBeNull();
+      act(() => window.dispatchEvent(new Event('blur')));
+      expect(harness.container.querySelector('.drop-overlay')).toBeNull();
+
+      dispatchDragEvent(appShell, 'dragenter', transfer);
+      act(() => window.dispatchEvent(new Event('dragend', { bubbles: true })));
+      expect(harness.container.querySelector('.drop-overlay')).toBeNull();
+
+      dispatchDragEvent(appShell, 'dragenter', transfer);
+      act(() => harness.container.querySelector<HTMLButtonElement>('button[aria-label="Open HTML"]')?.click());
+      await act(async () => nextTask());
+      expect(harness.container.querySelector('.drop-overlay')).toBeNull();
+
+      dispatchDragEvent(appShell, 'dragenter', transfer);
+      const overlay = harness.container.querySelector<HTMLElement>('.drop-overlay')!;
+      dispatchDragEvent(overlay, 'drop', transfer);
+      await act(async () => nextTask());
+      expect(harness.container.querySelector('.drop-overlay')).toBeNull();
+      expect(harness.container.textContent).toContain('Dropped report');
+    } finally {
+      harness.dispose();
+    }
+  });
 });
+
+function dispatchDragEvent(
+  target: EventTarget,
+  type: 'dragenter' | 'dragleave' | 'drop',
+  transfer: { types: string[]; files: File[] }
+): void {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'dataTransfer', {
+    configurable: true,
+    value: { ...transfer, dropEffect: 'none' }
+  });
+  act(() => target.dispatchEvent(event));
+}
 
 function renderComponent(element: React.ReactElement): HTMLDivElement {
   const container = document.createElement('div');
@@ -661,6 +825,7 @@ function renderAppHarness() {
   window.htmlpoint = {
     listSamples: async () => [],
     openHtmlDialog: async () => null,
+    openDroppedHtmlFile: async (file: File) => openedReport(file.name, 'Dropped report'),
     openSample: async (filePath: string) => ({ ...openedReport('sample.html', 'Sample'), filePath }),
     saveAsHtml: async () => null,
     createBackup: async () => ({}),

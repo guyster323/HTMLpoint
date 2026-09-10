@@ -13,7 +13,7 @@ PowerPoint 스타일의 셸 인터페이스를 기반으로 하는 오프라인 
    - `HTMLpoint-Portable-<version>-x64.exe`: 설치 권한이 없는 PC에서 사용하는 단일 실행 파일입니다.
 3. 같은 Release의 `SHA256SUMS.txt`로 다운로드 파일의 무결성을 확인할 수 있습니다.
 
-> 아직 Release가 보이지 않는 경우 유지관리자가 `v0.2.0` 같은 버전 태그를 push해야 합니다. 태그가 생성되면 GitHub Actions가 테스트, Windows 빌드, SHA-256 생성, Release 게시를 자동으로 수행합니다.
+> 아직 Release가 보이지 않는 경우 유지관리자가 `v0.2.1` 같은 버전 태그를 push해야 합니다. 태그가 생성되면 GitHub Actions가 테스트, Windows 빌드, SHA-256 생성, Release 게시를 자동으로 수행합니다.
 
 ### 비정상 종료 복구
 
@@ -32,7 +32,15 @@ PowerPoint 스타일의 셸 인터페이스를 기반으로 하는 오프라인 
 - **다양한 편집 도구**: 텍스트, 표(Table), 이미지, SVG 차트 데이터 편집 및 PPT 스타일 효과 적용을 지원합니다.
 
 ---
-## 🛠️ 최근 개선 내용 (Recent Improvements - 2026-07-13)
+## 🛠️ 최근 개선 내용 (Recent Improvements - 2026-09-10)
+
+### 0.2.1 보고서 호환성
+
+- KO/EN/DE별 Section 목록과 이동 대상을 분리하고, 현재 Section을 다시 눌러도 해당 위치로 복귀합니다.
+- 전체 보고서를 스크롤하다 다른 Section의 개체를 클릭하면 그 Section과 개체가 자동 선택됩니다.
+- 동적으로 생성되는 Rack Heatmap을 Section 하위 항목에서 찾아 현재 화면의 안전한 정적 표로 변환한 뒤 Objects에서 편집할 수 있습니다.
+- 보고서의 HTTP/HTTPS 링크는 미리보기 안에서 이동하지 않고 확인 후 기본 브라우저로 엽니다.
+- 두 번째 파일을 열거나 drag가 중단되어도 `Drop HTML Report` 레이어가 남지 않습니다.
 
 최근 UI/UX 안정성 및 기능성 향상을 위해 총 20건의 핵심 이슈(HPT-001 ~ HPT-020)를 해결 및 검증하였습니다.
 ### 1. UI/UX 및 안정성 개선
@@ -85,15 +93,15 @@ npm run package
 빌드가 완료되면 `release/` 폴더에 설치판과 포터블판이 함께 생성됩니다.
 
 ```text
-HTMLpoint-Setup-0.2.0-x64.exe
-HTMLpoint-Portable-0.2.0-x64.exe
+HTMLpoint-Setup-0.2.1-x64.exe
+HTMLpoint-Portable-0.2.1-x64.exe
 ```
 
 ### GitHub Release 게시
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
 
 `.github/workflows/release.yml`이 Windows에서 잠금 파일 기반 `npm ci`, 단위 테스트, 패키징과 체크섬 생성을 수행한 뒤 GitHub Release에 배포판을 첨부합니다. 수동 실행 시에는 GitHub Actions의 artifact로만 생성되며 Release는 만들지 않습니다.

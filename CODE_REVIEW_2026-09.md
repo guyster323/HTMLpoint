@@ -51,7 +51,7 @@
 ## 남은 위험과 다음 권장 사항
 
 1. Windows 코드 서명 인증서를 workflow secret 또는 조직 signing service와 연결해야 SmartScreen 경고를 최소화할 수 있다.
-2. 원본 HTML의 inline script는 preview sandbox 안에서 실행된다. 동적 차트 호환성을 위한 현재 설계이지만, 신뢰할 수 없는 HTML을 열 수 있는 제품으로 확장하려면 script 비활성 모드를 추가해야 한다.
+2. 원본 HTML의 inline script는 preview sandbox 안에서 실행된다. 동적 차트 호환성을 위한 현재 설계이며, `previewRevision`은 오래된 frame 이벤트를 거르는 상관관계 값이지 같은 frame의 원본 script를 인증하는 비밀값은 아니다. 현재는 신뢰할 수 있는 현장 보고서만 열어야 하며, 불특정 HTML을 지원하려면 script 비활성 모드 또는 page-world와 편집 bridge의 격리가 필요하다.
 3. 100 MB HTML, 25 MB 이미지 제한은 메모리 급증 방지용 초기 기준이다. 실제 현장 보고서 크기 분포를 수집한 뒤 조정할 수 있다.
 4. Release workflow 최초 실행 후 설치판 설치/삭제, portable 실행, 한글·공백 경로 열기/저장을 Windows VM에서 확인해야 한다.
 5. 현재 Electron 33 계열은 공식 지원 범위 밖이다. 이번 변경에서는 검증되지 않은 9개 major 동시 상승이 새 불안정을 만들 수 있어 즉시 교체하지 않았고, Dependabot과 CI를 추가했다. 지원 중인 Electron 42 이상으로 올리는 PR은 Windows 패키지 회귀를 통과한 뒤 병합해야 한다.

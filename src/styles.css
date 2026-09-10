@@ -477,6 +477,43 @@ select[data-tooltip]:focus-visible::after {
   padding: 5px;
   text-align: left;
 }
+.section-entry {
+  margin: 0 0 10px;
+}
+
+.section-entry .thumbnail {
+  margin-bottom: 3px;
+}
+
+.section-outline {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  width: calc(100% - 29px);
+  margin: 0 0 4px 29px;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  padding: 5px 7px;
+  color: #46515f;
+  font-size: 11px;
+  text-align: left;
+}
+
+.section-outline:hover,
+.section-outline.active {
+  border-color: #9dc3ef;
+  background: #e8f2ff;
+  color: #0c4f87;
+}
+
+.section-outline small {
+  border-radius: 999px;
+  background: #e1e6ed;
+  padding: 1px 5px;
+  font-size: 9px;
+}
 
 .thumbnail.active {
   border-color: var(--accent);

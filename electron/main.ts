@@ -1,10 +1,15 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, session, shell } from 'electron';
 import { copyFile, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PREVIEW_ASSET_SCHEME, PreviewAssetRegistry } from './previewProtocol.js';
+import {
+  openExternalLinkWithConfirmation,
+  shouldPreventSubframeNavigation,
+  type SafeExternalLink
+} from './externalLinks.js';
 import {
   AUTOSAVE_RETENTION,
   SOURCE_BACKUP_RETENTION,
@@ -48,6 +53,10 @@ interface SaveHtmlPayload {
   warnings?: string[];
 }
 const confirmedCloseWindows = new WeakSet<BrowserWindow>();
+const externalLinkPromptWindows = new WeakSet<BrowserWindow>();
+const externalLinkLastPromptAt = new WeakMap<BrowserWindow, number>();
+const EXTERNAL_LINK_PROMPT_COOLDOWN_MS = 1500;
+const trustedRendererContents = new Set<number>();
 const previewAssetRegistry = new PreviewAssetRegistry(randomUUID, realpath);
 const previewRegistryCleanupOwners = new Set<number>();
 const ALLOWED_PREVIEW_ASSET_RESOURCE_TYPES = new Set([
@@ -86,12 +95,33 @@ async function createWindow(): Promise<void> {
       webSecurity: true
     }
   });
+  const rendererContentsId = mainWindow.webContents.id;
+  trustedRendererContents.add(rendererContentsId);
+  mainWindow.webContents.once('destroyed', () => {
+    trustedRendererContents.delete(rendererContentsId);
+  });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+  mainWindow.webContents.on('will-frame-navigate', (event, ...legacyDetails: unknown[]) => {
+    const navigationEvent = event as typeof event & { isMainFrame?: boolean; url?: string };
+    const objectDetails =
+      legacyDetails[0] && typeof legacyDetails[0] === 'object'
+        ? (legacyDetails[0] as { isMainFrame?: boolean; url?: string })
+        : undefined;
+    const legacyUrl = typeof legacyDetails[0] === 'string' ? legacyDetails[0] : undefined;
+    const legacyIsMainFrame =
+      typeof legacyDetails[2] === 'boolean' ? legacyDetails[2] : undefined;
+    const navigationUrl = navigationEvent.url ?? objectDetails?.url ?? legacyUrl;
+    const isMainFrame =
+      navigationEvent.isMainFrame ?? objectDetails?.isMainFrame ?? legacyIsMainFrame;
+    if (isMainFrame !== true && shouldPreventSubframeNavigation(navigationUrl)) {
+      event.preventDefault();
+    }
+  });
   mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     if (mainWindow.isDestroyed() || details.reason === 'clean-exit') {
@@ -563,7 +593,59 @@ function getMimeType(filePath: string): string | undefined {
   }
   return undefined;
 }
+
+async function confirmExternalLink(
+  targetWindow: BrowserWindow,
+  link: SafeExternalLink
+): Promise<boolean> {
+  const lastPromptAt = externalLinkLastPromptAt.get(targetWindow);
+  if (
+    externalLinkPromptWindows.has(targetWindow) ||
+    (lastPromptAt !== undefined &&
+      Date.now() - lastPromptAt < EXTERNAL_LINK_PROMPT_COOLDOWN_MS)
+  ) {
+    return false;
+  }
+  externalLinkPromptWindows.add(targetWindow);
+  try {
+    const insecureWarning =
+      link.protocol === 'http:'
+        ? '주의: 암호화되지 않은 HTTP 주소입니다.\n\n'
+        : '';
+    const result = await dialog.showMessageBox(targetWindow, {
+      type: link.protocol === 'http:' ? 'warning' : 'question',
+      title: '외부 링크 열기',
+      message: `${link.hostname} 링크를 기본 브라우저로 여시겠습니까?`,
+      detail: `${insecureWarning}${link.url}`,
+      buttons: ['기본 브라우저로 열기', '취소'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true
+    });
+    return result.response === 0;
+  } finally {
+    externalLinkLastPromptAt.set(targetWindow, Date.now());
+    externalLinkPromptWindows.delete(targetWindow);
+  }
+}
+
 function installIpcHandlers(): void {
+  ipcMain.handle('htmlpoint:open-external-link', async (event, candidate: unknown) => {
+    const targetWindow = BrowserWindow.fromWebContents(event.sender);
+    if (
+      !targetWindow ||
+      targetWindow.isDestroyed() ||
+      !trustedRendererContents.has(event.sender.id) ||
+      !event.senderFrame ||
+      event.senderFrame !== event.sender.mainFrame
+    ) {
+      throw new Error('신뢰할 수 없는 화면에서 외부 링크 열기를 요청했습니다.');
+    }
+    return openExternalLinkWithConfirmation(candidate, {
+      confirm: (link) => confirmExternalLink(targetWindow, link),
+      open: (url) => shell.openExternal(url)
+    });
+  });
   ipcMain.handle('htmlpoint:register-preview-source', async (event, sourcePath: string) => {
     if (
       typeof sourcePath !== 'string' ||

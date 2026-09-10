@@ -24,6 +24,8 @@ interface CanvasProps {
   selectedSectionId?: string;
   selectedNodeId?: string;
   selectedNodeIds?: string[];
+  focusPath?: number[];
+  previewRevision?: string;
   imageArrowModeNodeId?: string;
   imageMosaicModeNodeId?: string;
   zoom: number;
@@ -45,6 +47,8 @@ export function Canvas({
   selectedSectionId,
   selectedNodeId,
   selectedNodeIds = selectedNodeId ? [selectedNodeId] : [],
+  focusPath,
+  previewRevision,
   imageArrowModeNodeId,
   imageMosaicModeNodeId,
   zoom,
@@ -126,10 +130,11 @@ export function Canvas({
       report.activeLanguage,
       selectedNodeId,
       selectedNodeIds,
-      effectivePreviewBaseUrl
+      effectivePreviewBaseUrl,
+      focusPath,
+      previewRevision
     );
-  }, [effectivePreviewBaseUrl, previewBasePending, report, selectedSectionId]);
-
+  }, [effectivePreviewBaseUrl, focusPath, previewBasePending, previewRevision, report, selectedSectionId]);
   useEffect(() => {
     const stage = stageRef.current;
     if (!fitMode || !hasPreview || !stage || !onFitZoomChange) {
@@ -225,6 +230,7 @@ export function Canvas({
                 ref={iframeRef}
                 title="Report preview"
                 sandbox="allow-scripts"
+                data-preview-revision={previewRevision}
                 srcDoc={previewHtml}
                 onLoad={() => {
                   postSelectionToPreview();

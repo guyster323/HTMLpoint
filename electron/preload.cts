@@ -30,6 +30,8 @@ const api = {
   openImageDialog: () => ipcRenderer.invoke('htmlpoint:open-image-dialog'),
   registerPreviewSource: (sourcePath: string): Promise<string> =>
     ipcRenderer.invoke('htmlpoint:register-preview-source', sourcePath),
+  openExternalLink: (url: string): Promise<{ opened: boolean }> =>
+    ipcRenderer.invoke('htmlpoint:open-external-link', url),
   onOpenedFile: (listener: Listener<HtmlFilePayload>) => {
     const wrapped = (_event: IpcRendererEvent, payload: HtmlFilePayload) => listener(payload);
     ipcRenderer.on('htmlpoint:file-opened', wrapped);

@@ -15,9 +15,14 @@ import {
   TranslationEntry
 } from '../types/htmlpoint';
 import { applyChartData } from './chartAdapters';
-import { getElementByPath, getElementPath } from './domPaths';
+import { getElementByPath, getElementPath, makeNodeId } from './domPaths';
 import { parseHtml, parseSectionHtml } from './htmlParser';
-
+import {
+  RUNTIME_TABLE_HOST_ATTRIBUTE,
+  RUNTIME_TABLE_SNAPSHOT_ATTRIBUTE,
+  sanitizeRuntimeTableHtml,
+  setSerializableImportantStyles
+} from './runtimeTableSnapshot';
 type SectionMutator = (sectionRoot: HTMLElement, node: Element) => boolean | void;
 
 export interface ImageArrowCoordinates {
@@ -1161,15 +1166,29 @@ export function moveSection(
   delta: -1 | 1
 ): ReportDocument {
   const index = report.sections.findIndex((section) => section.id === sectionId);
-  const nextIndex = index + delta;
-  if (index === -1 || nextIndex < 0 || nextIndex >= report.sections.length) {
+  if (index === -1) {
+    return report;
+  }
+
+  const source = report.sections[index];
+  const siblingIndexes = report.sections
+    .map((section, candidateIndex) => ({ section, candidateIndex }))
+    .filter(
+      ({ section }) =>
+        section.parentKey === source.parentKey &&
+        section.languageScope === source.languageScope
+    )
+    .map(({ candidateIndex }) => candidateIndex);
+  const siblingIndex = siblingIndexes.indexOf(index);
+  const nextIndex = siblingIndexes[siblingIndex + delta];
+  if (siblingIndex === -1 || nextIndex === undefined) {
     return report;
   }
 
   const sections = [...report.sections];
-  const [moved] = sections.splice(index, 1);
-  sections.splice(nextIndex, 0, { ...moved, changed: true });
-
+  const moved = { ...sections[index], changed: true };
+  sections[index] = sections[nextIndex];
+  sections[nextIndex] = moved;
   return markReportChanged({ ...report, sections }, {
     type: 'section',
     label: `섹션 순서 변경: ${moved.title}`,
@@ -1332,6 +1351,170 @@ function mutateSection(
 
 const INSERTION_TOKEN_ATTRIBUTE = 'data-htmlpoint-insertion-token';
 let insertionTokenSequence = 0;
+
+/**
+ * Freezes a table created by report runtime JavaScript into an inert, editable
+ * snapshot. The original host remains in the document (so its script does not
+ * fail) but is hidden; the snapshot is stored as its immediately following
+ * sibling.
+ */
+export function captureRuntimeTable(
+  report: ReportDocument,
+  sectionId: string,
+  hostPath: number[],
+  tableHtml: string
+): EditResult {
+  const section = findSection(report, sectionId);
+  if (
+    !section ||
+    !hostPath.length ||
+    hostPath.some((part) => !Number.isInteger(part) || part < 0)
+  ) {
+    return makeEditResult(report);
+  }
+
+  const sectionDocument = parseHtml(section.html);
+  const sectionRoot = sectionDocument.body.firstElementChild as HTMLElement | null;
+  const host = sectionRoot ? getElementByPath(sectionRoot, hostPath) : null;
+  if (
+    !sectionRoot ||
+    !(host instanceof HTMLElement) ||
+    host === sectionRoot ||
+    !host.parentElement ||
+    !canContainRuntimeTableSnapshot(host.parentElement)
+  ) {
+    return makeEditResult(report);
+  }
+
+  const existingTable = findCapturedRuntimeTable(host);
+  if (existingTable) {
+    const existingPath = getElementPath(sectionRoot, existingTable);
+    const existingNodeId =
+      section.editableNodes.find(
+        (node) => node.kind === 'table' && pathsEqual(node.path, existingPath)
+      )?.id ?? makeNodeId(sectionId, existingPath, 'table');
+    return makeEditResult(report, existingNodeId);
+  }
+
+  const belongsToDynamicOutline = section.outlineItems?.some(
+    (item) =>
+      item.dynamic &&
+      hostPath.length > item.path.length &&
+      item.path.every((part, index) => hostPath[index] === part)
+  );
+  if (!belongsToDynamicOutline) {
+    return makeEditResult(report);
+  }
+
+  const sanitizedTable = sanitizeRuntimeTableHtml(tableHtml);
+  if (!sanitizedTable) {
+    return makeEditResult(report);
+  }
+
+  const before = section.html;
+  const insertionToken = `htmlpoint-${Date.now()}-${insertionTokenSequence += 1}`;
+  const table = sectionDocument.importNode(sanitizedTable, true) as HTMLTableElement;
+  table.setAttribute(INSERTION_TOKEN_ATTRIBUTE, insertionToken);
+
+  host.setAttribute(RUNTIME_TABLE_HOST_ATTRIBUTE, 'true');
+  host.hidden = true;
+  host.setAttribute('aria-hidden', 'true');
+  setSerializableImportantStyles(host, [['display', 'none']]);
+
+  const wrapper = sectionDocument.createElement('div');
+  wrapper.setAttribute(RUNTIME_TABLE_SNAPSHOT_ATTRIBUTE, 'true');
+  wrapper.setAttribute('role', 'region');
+  wrapper.setAttribute('aria-label', 'Static table snapshot');
+  wrapper.style.maxWidth = '100%';
+  wrapper.style.overflowX = 'auto';
+  setSerializableImportantStyles(wrapper, [
+    ['display', 'block'],
+    ['visibility', 'visible'],
+    ['opacity', '1']
+  ]);
+  wrapper.appendChild(table);
+  host.after(wrapper);
+
+  const details = host.closest('details');
+  if (details instanceof HTMLDetailsElement) {
+    details.open = true;
+  }
+
+  // Normalize once before resolving the table. Browsers can repair malformed
+  // table markup and therefore change element paths during serialization.
+  const normalizedDocument = parseHtml(sectionRoot.outerHTML);
+  const normalizedRoot = normalizedDocument.body.firstElementChild as HTMLElement | null;
+  const normalizedTable = normalizedRoot
+    ? Array.from(
+        normalizedRoot.querySelectorAll<HTMLTableElement>(
+          `table[${INSERTION_TOKEN_ATTRIBUTE}]`
+        )
+      ).find(
+        (candidate) => candidate.getAttribute(INSERTION_TOKEN_ATTRIBUTE) === insertionToken
+      )
+    : undefined;
+  if (!normalizedRoot || !normalizedTable) {
+    return makeEditResult(report);
+  }
+
+  normalizedTable.removeAttribute(INSERTION_TOKEN_ATTRIBUTE);
+  const insertedPath = getElementPath(normalizedRoot, normalizedTable);
+  const nextSection = parseSectionHtml(
+    {
+      ...section,
+      html: normalizedRoot.outerHTML,
+      changed: true
+    },
+    report.translations
+  );
+  const insertedNodeId = nextSection.editableNodes.find(
+    (node) => node.kind === 'table' && pathsEqual(node.path, insertedPath)
+  )?.id;
+  if (!insertedNodeId) {
+    return makeEditResult(report);
+  }
+
+  const updatedReport = markReportChanged(
+    {
+      ...report,
+      sections: report.sections.map((candidate) =>
+        candidate.id === sectionId ? nextSection : candidate
+      )
+    },
+    {
+      type: 'table',
+      label: `동적 표 정적 편집본 생성: ${section.title}`,
+      sectionId,
+      nodeId: insertedNodeId,
+      before,
+      after: nextSection.html
+    }
+  );
+  return makeEditResult(updatedReport, insertedNodeId);
+}
+
+function findCapturedRuntimeTable(host: HTMLElement): HTMLTableElement | undefined {
+  const wrapper = host.nextElementSibling;
+  if (
+    !(wrapper instanceof HTMLElement) ||
+    wrapper.getAttribute(RUNTIME_TABLE_SNAPSHOT_ATTRIBUTE) !== 'true'
+  ) {
+    return undefined;
+  }
+  return Array.from(wrapper.children).find(
+    (child): child is HTMLTableElement => child instanceof HTMLTableElement
+  );
+}
+
+function canContainRuntimeTableSnapshot(parent: HTMLElement): boolean {
+  return !['table', 'thead', 'tbody', 'tfoot', 'tr', 'colgroup'].includes(
+    parent.tagName.toLowerCase()
+  );
+}
+
+function pathsEqual(left: number[], right: number[]): boolean {
+  return left.length === right.length && left.every((part, index) => part === right[index]);
+}
 
 function insertSectionObject(
   report: ReportDocument,
