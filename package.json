@@ -1,6 +1,6 @@
 {
   "name": "htmlpoint",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Offline Windows portable HTML report editor with a PowerPoint-style shell.",
   "main": "dist-electron/main.js",
   "type": "module",
@@ -13,8 +13,10 @@
     "test": "npm run test:unit",
     "test:unit": "vitest run",
     "test:e2e:renderer": "concurrently -k --success first \"vite preview --host 127.0.0.1 --strictPort --port 4173\" \"wait-on tcp:4173 && node tests/e2e/renderer-performance.cjs\"",
-    "verify:release": "npm run package && npm run test:unit && npm run test:e2e:renderer",
-    "package": "npm run build && electron-builder --win portable",
+    "verify:release": "npm run test:unit && npm run test:e2e:renderer && npm run package",
+    "package": "npm run build && electron-builder --win nsis portable",
+    "package:installer": "npm run build && electron-builder --win nsis",
+    "package:portable": "npm run build && electron-builder --win portable",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
@@ -41,6 +43,7 @@
   "build": {
     "appId": "com.lges.htmlpoint",
     "productName": "HTMLpoint",
+    "asar": true,
     "directories": {
       "output": "release"
     },
@@ -49,17 +52,14 @@
       "dist-electron/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "HTML_reference",
-        "to": "HTML_reference",
-        "filter": [
-          "*.html"
-        ]
-      }
-    ],
     "win": {
       "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
         {
           "target": "portable",
           "arch": [
@@ -68,8 +68,16 @@
         }
       ]
     },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "HTMLpoint-Setup-${version}-x64.exe",
+      "deleteAppDataOnUninstall": false
+    },
     "portable": {
-      "artifactName": "HTMLpoint-${version}-portable.exe"
+      "artifactName": "HTMLpoint-Portable-${version}-x64.exe"
     }
   }
 }

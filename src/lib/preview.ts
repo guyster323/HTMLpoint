@@ -9,7 +9,6 @@ export interface PreviewNodePayload {
   label: string;
   path: number[];
 }
-
 export function sourcePathToBaseUrl(sourcePath?: string): string | undefined {
   const source = sourcePath?.trim();
   if (!source) {
@@ -29,7 +28,6 @@ export function sourcePathToBaseUrl(sourcePath?: string): string | undefined {
   if (lastSeparator < 0) {
     return undefined;
   }
-
   const directory = normalized.slice(0, lastSeparator + 1);
   const encodedDirectory = directory
     .split('/')
@@ -37,7 +35,6 @@ export function sourcePathToBaseUrl(sourcePath?: string): string | undefined {
       index === 0 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment)
     )
     .join('/');
-
   if (/^[a-z]:\//i.test(directory)) {
     return `file:///${encodedDirectory}`;
   }
@@ -49,7 +46,6 @@ export function sourcePathToBaseUrl(sourcePath?: string): string | undefined {
   }
   return undefined;
 }
-
 const PREVIEW_SELECTION_CSS = `
   .htmlpoint-preview-node {
     cursor: pointer !important;
@@ -112,7 +108,6 @@ const PREVIEW_SELECTION_CSS = `
   }
   .htmlpoint-image-mosaic-ready { cursor: crosshair !important; }
 `;
-
 export function buildPreviewSelectionPayload(
   report: ReportDocument,
   selectedSectionId: string
@@ -125,7 +120,6 @@ export function buildPreviewSelectionPayload(
     path: node.path
   }));
 }
-
 export function buildPreviewHtml(
   report: ReportDocument,
   selectedSectionId: string,
@@ -153,11 +147,9 @@ export function buildPreviewHtml(
   let imageArrowModeNodeId = '';
   let imageMosaicModeNodeId = '';
   let marquee = null;
-
   function elementByPath(root, path) {
     return path.reduce((current, index) => current && current.children ? current.children[index] : null, root);
   }
-
   function getImageFrameElement(element) {
     const parent = element && element.parentElement;
     if (!parent || !parent.tagName || ['section', 'header'].includes(parent.tagName.toLowerCase())) return null;
@@ -165,14 +157,12 @@ export function buildPreviewHtml(
     if (parent.children && parent.children.length > 3) return null;
     return parent;
   }
-
   function visualTargetFor(node, element) {
     if (node && node.kind === 'image') {
       return getImageFrameElement(element) || element;
     }
     return element;
   }
-
   function normalizeColor(value) {
     if (!value || value === 'transparent' || value === 'rgba(0, 0, 0, 0)') return undefined;
     const hex = String(value).trim().match(/^#[0-9a-f]{6}$/i);
@@ -183,7 +173,6 @@ export function buildPreviewHtml(
     if (!rgb) return undefined;
     return '#' + [rgb[1], rgb[2], rgb[3]].map((channel) => Number(channel).toString(16).padStart(2, '0')).join('');
   }
-
   function inferEffectPreset(element, computed, fill, textColor) {
     const classes = Array.from(element.classList || []).map((className) => className.toLowerCase());
     const has = (className) => classes.includes(className);
@@ -198,7 +187,6 @@ export function buildPreviewHtml(
     if (element.dataset && element.dataset.htmlpointEffect) return element.dataset.htmlpointEffect;
     return (computed.display.includes('inline') || has('pill') || has('badge')) ? 'neutral' : 'none';
   }
-
   function snapshotTextStyle(element) {
     const computed = window.getComputedStyle(element);
     return {
@@ -210,7 +198,6 @@ export function buildPreviewHtml(
       color: normalizeColor(computed.color)
     };
   }
-
   function snapshotTextEffect(element) {
     const computed = window.getComputedStyle(element);
     const fill = normalizeColor(computed.backgroundColor);
@@ -237,7 +224,6 @@ export function buildPreviewHtml(
       bold: Number(computed.fontWeight) >= 600 || computed.fontWeight === 'bold'
     };
   }
-
   function snapshotImageMetrics(element) {
     const rect = element.getBoundingClientRect();
     return {
@@ -246,7 +232,6 @@ export function buildPreviewHtml(
       style: element.getAttribute('style') || undefined
     };
   }
-
   function snapshotFrameMetrics(element) {
     if (!(element instanceof HTMLElement)) return undefined;
     const rect = element.getBoundingClientRect();
@@ -256,7 +241,6 @@ export function buildPreviewHtml(
       style: element.getAttribute('style') || undefined
     };
   }
-
   function selectionSnapshot(node, target) {
     const visualTarget = visualTargetFor(node, target);
     const snapshot = { nodeId: node.id };
@@ -272,7 +256,6 @@ export function buildPreviewHtml(
     }
     return snapshot;
   }
-
   function postSelectionMessage(type, nodeId, extra) {
     const { node, target } = nodeElement(nodeId);
     const snapshot = node && (target instanceof HTMLElement || target instanceof SVGElement)
@@ -287,7 +270,6 @@ export function buildPreviewHtml(
       ...extra
     }, '*');
   }
-
   function beginInlineTextEdit(element, node, event) {
     if (!(element instanceof HTMLElement)) return;
     if (!node || !['text', 'list'].includes(node.kind)) return;
@@ -296,7 +278,6 @@ export function buildPreviewHtml(
     event.preventDefault();
     event.stopPropagation();
     selectNode(node.id, true, event.ctrlKey || event.metaKey);
-
     const originalText = element.textContent || '';
     element.dataset.htmlpointInlineEditing = 'true';
     element.classList.add('htmlpoint-inline-editing');
@@ -308,7 +289,6 @@ export function buildPreviewHtml(
     const selection = window.getSelection();
     selection.removeAllRanges();
     selection.addRange(range);
-
     let closed = false;
     const cleanup = () => {
       element.classList.remove('htmlpoint-inline-editing');
@@ -347,11 +327,9 @@ export function buildPreviewHtml(
         commit();
       }
     };
-
     element.addEventListener('blur', commit);
     element.addEventListener('keydown', handleKeyDown);
   }
-
   function clearSelection() {
     document.querySelectorAll('.htmlpoint-selected-node, .htmlpoint-selected-node-multi, .htmlpoint-selected-node-child').forEach((element) => {
       element.classList.remove('htmlpoint-selected-node');
@@ -361,7 +339,6 @@ export function buildPreviewHtml(
     });
     document.querySelectorAll('.htmlpoint-selection-overlay').forEach((overlay) => overlay.remove());
   }
-
   function addHandles(element, node) {
     if (!(element instanceof HTMLElement) && !(element instanceof SVGElement)) return;
     const resizeTarget = visualTargetFor(node, element);
@@ -430,7 +407,6 @@ export function buildPreviewHtml(
       overlay.appendChild(handle);
     });
   }
-
   function selectedSlideElement() {
     return document.querySelectorAll('header, section')[selectedIndex];
   }
@@ -443,14 +419,12 @@ export function buildPreviewHtml(
     document.body.style.transformOrigin = 'top left';
     document.body.style.transform = '';
   }
-
   function nodeElement(nodeId) {
     const node = htmlpointNodes.find((entry) => entry.id === nodeId);
     const selectedSlide = selectedSlideElement();
     const target = node && selectedSlide ? elementByPath(selectedSlide, node.path) : null;
     return { node, target };
   }
-
   function paintSelections() {
     clearSelection();
     const ids = Array.from(selectedNodeIds).filter(Boolean);
@@ -472,7 +446,6 @@ export function buildPreviewHtml(
       }
     });
   }
-
   function selectNode(nodeId, announce, additive) {
     const nextIds = new Set(additive ? selectedNodeIds : []);
     if (additive && nextIds.has(nodeId)) {
@@ -490,7 +463,6 @@ export function buildPreviewHtml(
       postSelectionMessage('htmlpoint-select-node', nodeId, { ctrlKey: Boolean(additive) });
     }
   }
-
   function selectNodes(nodeIds, announce) {
     const validIds = nodeIds.filter((nodeId) => htmlpointNodes.some((node) => node.id === nodeId));
     if (!validIds.length) return;
@@ -501,7 +473,6 @@ export function buildPreviewHtml(
       postSelectionMessage('htmlpoint-select-nodes', selectedNodeId, { nodeIds: validIds, ctrlKey: true });
     }
   }
-
   function applyEditorSelection(nodeId, nodeIds) {
     const requestedIds = Array.isArray(nodeIds)
       ? nodeIds.filter((id) => typeof id === 'string')
@@ -509,7 +480,6 @@ export function buildPreviewHtml(
     const primary = typeof nodeId === 'string' ? nodeId : requestedIds[0];
     const validIds = (requestedIds.length ? requestedIds : primary ? [primary] : [])
       .filter((id) => htmlpointNodes.some((node) => node.id === id));
-
     if (!validIds.length) {
       selectedNodeId = undefined;
       selectedNodeIds = new Set();
@@ -522,7 +492,6 @@ export function buildPreviewHtml(
     paintSelections();
     postSelectionMessage('htmlpoint-select-node', selectedNodeId, { previewSync: true });
   }
-
   function isImageArrowEligible(element) {
     if (!(element instanceof HTMLImageElement)) return false;
     const parent = element.parentElement;
@@ -530,7 +499,6 @@ export function buildPreviewHtml(
     const generatedHost = parent && parent.dataset && parent.dataset.htmlpointImageAnnotationHost === 'true';
     return Boolean((bare || generatedHost) && !element.style.transform && !element.style.clipPath && !element.style.getPropertyValue('--htmlpoint-crop-scale').trim());
   }
-
   function updateImageArrowMode() {
     htmlpointNodes.forEach((node) => {
       const { target } = nodeElement(node.id);
@@ -539,7 +507,6 @@ export function buildPreviewHtml(
       }
     });
   }
-
   function createTransientArrow(rect, startX, startY) {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 ' + rect.width + ' ' + rect.height);
@@ -556,14 +523,12 @@ export function buildPreviewHtml(
     document.documentElement.appendChild(svg);
     return { svg, line };
   }
-
   function normalizedArrowPosition(event, rect) {
     return {
       x: Math.max(0, Math.min(100, Number((((event.clientX - rect.left) / rect.width) * 100).toFixed(3)))),
       y: Math.max(0, Math.min(100, Number((((event.clientY - rect.top) / rect.height) * 100).toFixed(3))))
     };
   }
-
   function addImageArrowDrawing(element, node) {
     if (!(element instanceof HTMLImageElement)) return;
     element.addEventListener('pointerdown', (event) => {
@@ -620,14 +585,12 @@ export function buildPreviewHtml(
       window.addEventListener('pointerup', finish, { once: true });
     });
   }
-
   function updateImageMosaicMode() {
     htmlpointNodes.forEach((node) => {
       const { target } = nodeElement(node.id);
       if (target instanceof HTMLImageElement) target.classList.toggle('htmlpoint-image-mosaic-ready', node.id === imageMosaicModeNodeId);
     });
   }
-
   function addImageMosaicDrawing(element, node) {
     if (!(element instanceof HTMLImageElement)) return;
     element.addEventListener('pointerdown', (event) => {
@@ -659,10 +622,9 @@ export function buildPreviewHtml(
       window.addEventListener('pointermove', update); window.addEventListener('pointerup', finish, { once: true }); update(event);
     });
   }
-
   window.addEventListener('message', (event) => {
     const data = event.data || {};
-    if (data.source !== 'htmlpoint-editor') return;
+    if (event.source !== window.parent || data.source !== 'htmlpoint-editor') return;
     if (data.type === 'htmlpoint-set-selection') {
       applyEditorSelection(data.selectedNodeId, data.selectedNodeIds);
       return;
@@ -677,14 +639,12 @@ export function buildPreviewHtml(
       updateImageMosaicMode();
     }
   });
-
   function rectsIntersect(left, right) {
     return left.left <= right.right &&
       left.right >= right.left &&
       left.top <= right.bottom &&
       left.bottom >= right.top;
   }
-
   function beginMarquee(event) {
     if (!event.ctrlKey && !event.metaKey) return;
     if (!(event.currentTarget instanceof HTMLElement)) return;
@@ -725,7 +685,6 @@ export function buildPreviewHtml(
     document.addEventListener('pointermove', updateMarquee);
     document.addEventListener('pointerup', finishMarquee, { once: true });
   }
-
   requestAnimationFrame(() => {
     document.documentElement.style.overflow = 'auto';
     document.body.style.overflow = 'auto';
@@ -774,7 +733,6 @@ export function buildPreviewHtml(
 </script>`;
   const document = parseHtml(base);
   stripEditorArtifacts(document);
-
   if (sourceBaseUrl) {
     const baseElement = document.createElement('base');
     baseElement.dataset.htmlpointPreviewBase = 'true';
@@ -786,7 +744,6 @@ export function buildPreviewHtml(
   styleElement.dataset.htmlpointPreviewStyle = 'true';
   styleElement.textContent = PREVIEW_SELECTION_CSS;
   document.head.appendChild(styleElement);
-
   const scriptDocument = parseHtml(script);
   const scriptElement = scriptDocument.querySelector('script');
   if (scriptElement) {
@@ -798,7 +755,6 @@ export function buildPreviewHtml(
 
   return serializeFullDocument(document);
 }
-
 export function buildThumbnailHtml(sectionHtml: string): string {
   const document = parseHtml(`<!doctype html><html><head><style>
     body { margin: 0; background: #fff; color: #222; font-family: Arial, sans-serif; overflow: hidden; }
@@ -814,7 +770,6 @@ export function buildThumbnailHtml(sectionHtml: string): string {
   neutralizeThumbnailAssetRequests(document);
   return serializeFullDocument(document);
 }
-
 function neutralizeThumbnailAssetRequests(document: Document): void {
   document.querySelectorAll<HTMLElement>('[src]').forEach((element) => {
     const source = element.getAttribute('src');
@@ -829,7 +784,6 @@ function neutralizeThumbnailAssetRequests(document: Document): void {
     }
   });
 }
-
 function isMemoryAssetUrl(source: string): boolean {
   const urlParserInput = source.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '');
   return /^(?:data|blob):/i.test(urlParserInput);
@@ -843,7 +797,6 @@ function isMemoryOnlySourceSet(sourceSet: string): boolean {
 function parseSourceSetUrls(sourceSet: string): string[] {
   const urls: string[] = [];
   let index = 0;
-
   while (index < sourceSet.length) {
     while (
       index < sourceSet.length &&
@@ -854,7 +807,6 @@ function parseSourceSetUrls(sourceSet: string): string[] {
     if (index >= sourceSet.length) {
       break;
     }
-
     const start = index;
     const dataUrl = sourceSet.slice(index, index + 5).toLowerCase() === 'data:';
     while (
@@ -870,7 +822,6 @@ function parseSourceSetUrls(sourceSet: string): string[] {
     if (trailingCommas) {
       continue;
     }
-
     let parentheses = 0;
     while (index < sourceSet.length) {
       const character = sourceSet[index];
@@ -888,7 +839,6 @@ function parseSourceSetUrls(sourceSet: string): string[] {
 
   return urls;
 }
-
 function isSourceSetWhitespace(character: string): boolean {
   return /[\u0009\u000a\u000c\u000d\u0020]/.test(character);
 }

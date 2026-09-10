@@ -235,6 +235,7 @@ describe('data preservation', () => {
     act(() => {
       window.dispatchEvent(
         new MessageEvent('message', {
+          source: getPreviewWindow(),
           data: {
             source: 'htmlpoint-preview',
             type: 'htmlpoint-edit-text',
@@ -259,6 +260,7 @@ describe('data preservation', () => {
     await harness.openRichReport();
     const previewEdit = (text: string) =>
       new MessageEvent('message', {
+        source: getPreviewWindow(),
         data: {
           source: 'htmlpoint-preview',
           type: 'htmlpoint-edit-text',
@@ -460,6 +462,7 @@ describe('data preservation', () => {
     act(() => {
       window.dispatchEvent(
         new MessageEvent('message', {
+          source: getPreviewWindow(),
           data: {
             source: 'htmlpoint-preview',
             type: 'htmlpoint-select-node',
@@ -655,4 +658,14 @@ function buttonWithText(text: string): HTMLButtonElement {
 
 function nextTask(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+function getPreviewWindow(): Window {
+  const previewWindow = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Report preview"]'
+  )?.contentWindow;
+  if (!previewWindow) {
+    throw new Error('Preview iframe window is unavailable.');
+  }
+  return previewWindow;
 }

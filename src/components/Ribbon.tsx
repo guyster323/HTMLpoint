@@ -29,7 +29,6 @@ import {
   TextStyleSettings,
   TextStyleSnapshot
 } from '../types/htmlpoint';
-
 interface RibbonProps {
   report: ReportDocument | null;
   samples?: SampleFile[];
@@ -44,6 +43,7 @@ interface RibbonProps {
   onTabChange: (tab: string) => void;
   onOpen: () => void;
   onSampleOpen?: (sample: SampleFile) => void;
+  onSave?: () => void;
   onSaveAs: () => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -64,14 +64,12 @@ interface RibbonProps {
   onReviewSummary: () => void;
   onLanguageChange: (language: string) => void;
 }
-
 const tabs = ['Home', 'Insert', 'Table', 'Image', 'Review', 'Export'];
 const RIBBON_PANEL_ID = 'ribbon-panel';
 
 export interface RibbonGroupModel {
   title: string;
 }
-
 export function getRibbonGroupsForTab(tab: string): RibbonGroupModel[] {
   switch (tab) {
     case 'Insert':
@@ -95,7 +93,6 @@ export function getRibbonGroupsForTab(tab: string): RibbonGroupModel[] {
       ];
   }
 }
-
 export function Ribbon({
   report,
   activeTab,
@@ -108,6 +105,7 @@ export function Ribbon({
   canRedo,
   onTabChange,
   onOpen,
+  onSave,
   onSaveAs,
   onUndo,
   onRedo,
@@ -139,7 +137,6 @@ export function Ribbon({
       selectedSectionIndex < sectionCount &&
       selectedSectionIndex < report.sections.length
   );
-
   return (
     <header className="chrome">
       <div className="title-row">
@@ -148,16 +145,16 @@ export function Ribbon({
           <strong>HTMLpoint</strong>
         </div>
         <div className="quick-actions" aria-label="Quick actions">
-          <IconButton icon={<Save />} label="Save As HTML" onClick={onSaveAs} disabled={!report} />
+          <IconButton icon={<Save />} label="Save" onClick={onSave ?? onSaveAs} disabled={!report || !report.dirty} />
           <IconButton icon={<Undo2 />} label="Undo" onClick={onUndo} disabled={!canUndo} />
           <IconButton icon={<Redo2 />} label="Redo" onClick={onRedo} disabled={!canRedo} />
         </div>
         <div className="document-title">
           {report ? <>{report.fileName || 'HTML Report'} <span>{report.dirty ? 'Modified' : 'Saved'}</span></> : 'No document'}
         </div>
-        <button className="primary-save" type="button" onClick={onSaveAs} disabled={!report} {...tooltipProps('Save As HTML')}>
+        <button className="primary-save" type="button" onClick={onSave ?? onSaveAs} disabled={!report || !report.dirty} {...tooltipProps('Save HTML')}>
           <Save size={16} />
-          Save As HTML
+          Save
         </button>
       </div>
       <nav className="tab-row" role="tablist" aria-label="Ribbon tabs">
@@ -326,7 +323,7 @@ export function Ribbon({
         )}
         {activeTab === 'Export' && (
           <RibbonGroup title="Export">
-            <button className="large-tool" type="button" onClick={onSaveAs} disabled={!report} {...tooltipProps('Export HTML')}>
+            <button className="large-tool" type="button" onClick={onSaveAs} disabled={!report} {...tooltipProps('Save As HTML')}>
               <Download />
               <span>HTML</span>
             </button>
@@ -336,7 +333,6 @@ export function Ribbon({
     </header>
   );
 }
-
 function FileGroup({
   onOpen
 }: {
@@ -351,7 +347,6 @@ function FileGroup({
     </RibbonGroup>
   );
 }
-
 function MoveButtons({
   canMoveUp,
   canMoveDown,
@@ -374,7 +369,6 @@ function MoveButtons({
     </>
   );
 }
-
 function SectionButtons({
   hasSelectedSection,
   sectionCount,
@@ -418,7 +412,6 @@ function SectionButtons({
     </RibbonGroup>
   );
 }
-
 function LanguageGroup({
   report,
   onLanguageChange
@@ -442,7 +435,6 @@ function LanguageGroup({
     </RibbonGroup>
   );
 }
-
 function RibbonGroup({ title, children }: { title: string; children: ReactNode }): JSX.Element {
   return (
     <section className="ribbon-group">
@@ -451,7 +443,6 @@ function RibbonGroup({ title, children }: { title: string; children: ReactNode }
     </section>
   );
 }
-
 function IconButton({
   icon,
   label,
@@ -478,7 +469,6 @@ function IconButton({
     </button>
   );
 }
-
 function normalizeFontFamily(fontFamily?: string): string {
   if (!fontFamily) {
     return '';
@@ -487,7 +477,6 @@ function normalizeFontFamily(fontFamily?: string): string {
   const options = ['Noto Sans KR', 'Malgun Gothic', 'Arial', 'Segoe UI'];
   return options.includes(first) ? first : 'Noto Sans KR';
 }
-
 function normalizeFontSize(fontSize?: string): string {
   if (!fontSize) {
     return '';
@@ -504,7 +493,6 @@ function normalizeFontSize(fontSize?: string): string {
 function ribbonTabId(tab: string): string {
   return `ribbon-tab-${tab.toLowerCase()}`;
 }
-
 function handleRibbonTabKeyDown(
   event: KeyboardEvent<HTMLButtonElement>,
   tab: string,
@@ -528,7 +516,6 @@ function handleRibbonTabKeyDown(
     default:
       return;
   }
-
   event.preventDefault();
   const tabButtons = event.currentTarget
     .closest('[role="tablist"]')
