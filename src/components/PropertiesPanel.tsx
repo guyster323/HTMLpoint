@@ -3,12 +3,15 @@ import { BarChart3, Image as ImageIcon, List, Palette, Table2, Type } from 'luci
 import { parseChartCsvRows, serializeChartCsvRows } from '../lib/chartCsv';
 import { resizeWithAspectLock } from '../lib/imageSizing';
 import { getAutoTextareaRows } from '../lib/uiSizing';
+import { semanticLayoutNodes, semanticRepresentativeId } from '../lib/objectLayout';
 import {
   ChartDataRow,
   ChartPresentationSettings,
   EditableNode,
   ImageFilterSettings,
   ImageResizeSettings,
+  ObjectLayoutMetrics,
+  ObjectLayoutPatch,
   ReportDocument,
   TableCellSnapshot,
   TextEffectSettings,
@@ -21,6 +24,8 @@ interface PropertiesPanelProps {
   selectedNodeId?: string;
   selectedNodeIds?: string[];
   selectedNodeOverride?: EditableNode;
+  selectedLayoutMetrics?: ObjectLayoutMetrics;
+  selectedObjectCount?: number;
   selectedCell: { row: number; cell: number };
   onNodeSelect: (nodeId: string) => void;
   onCellSelect: (row: number, cell: number) => void;
@@ -51,6 +56,7 @@ interface PropertiesPanelProps {
   imageMosaicArmed?: boolean;
   onChartPresentation: (nodeId: string, settings: ChartPresentationSettings) => void;
   onChartData: (nodeId: string, rows: ChartDataRow[]) => void;
+  onObjectLayout?: (patch: ObjectLayoutPatch) => void;
 }
 
 export function PropertiesPanel({
@@ -59,6 +65,8 @@ export function PropertiesPanel({
   selectedNodeId,
   selectedNodeIds = selectedNodeId ? [selectedNodeId] : [],
   selectedNodeOverride,
+  selectedLayoutMetrics,
+  selectedObjectCount,
   selectedCell,
   onNodeSelect,
   onCellSelect,
@@ -88,12 +96,14 @@ export function PropertiesPanel({
   onDrawImageMosaic,
   imageMosaicArmed,
   onChartPresentation,
-  onChartData
+  onChartData,
+  onObjectLayout = () => undefined
 }: PropertiesPanelProps): JSX.Element {
   const section = report?.sections.find((candidate) => candidate.id === selectedSectionId);
   const selectedNodes = (section?.editableNodes ?? []).filter((candidate) =>
     selectedNodeIds.includes(candidate.id)
   );
+  const layoutSelectionCount = selectedObjectCount ?? selectedNodes.length;
   const selectedNodeFromSection =
     selectedNodes.find((candidate) => candidate.id === selectedNodeId) ??
     section?.editableNodes.find((candidate) => candidate.id === selectedNodeId);
@@ -127,9 +137,17 @@ export function PropertiesPanel({
             <ObjectPicker
               nodes={section.editableNodes}
               selectedNodeId={selectedNodeId}
-              selectedCount={selectedNodes.length}
+              selectedCount={layoutSelectionCount}
               onNodeSelect={onNodeSelect}
             />
+            {selectedNode && selectedNodeIds.length === 1 && layoutSelectionCount === 1 && selectedLayoutMetrics && (
+              <LayoutInspector
+                key={`${selectedNode.id}:${selectedLayoutMetrics.x}:${selectedLayoutMetrics.y}:${selectedLayoutMetrics.width}:${selectedLayoutMetrics.height}`}
+                node={selectedNode}
+                metrics={selectedLayoutMetrics}
+                onApply={onObjectLayout}
+              />
+            )}
             {!sameKindSelection && selectedNodes.length > 1 && (
               <div className="multi-select-note">
                 서로 다른 종류의 개체 {selectedNodes.length}개가 선택되어 공통 Properties만 표시됩니다.
@@ -275,18 +293,233 @@ function ObjectPicker({
   selectedCount: number;
   onNodeSelect: (nodeId: string) => void;
 }): JSX.Element {
+  const objectNodes = semanticLayoutNodes(nodes);
+  const selectedObjectId = semanticRepresentativeId(nodes, selectedNodeId);
   return (
     <label className="field">
       <span>Selected object{selectedCount > 1 ? ` · ${selectedCount} selected` : ''}</span>
-      <select value={selectedNodeId ?? ''} onChange={(event) => onNodeSelect(event.target.value)}>
+      <select value={selectedObjectId ?? ''} onChange={(event) => onNodeSelect(event.target.value)}>
         <option value="">None</option>
-        {nodes.map((node) => (
+        {objectNodes.map((node) => (
           <option key={node.id} value={node.id}>
             {node.kind} · {node.label}
           </option>
         ))}
       </select>
     </label>
+  );
+}
+
+function LayoutInspector({
+  node,
+  metrics,
+  onApply
+}: {
+  node: EditableNode;
+  metrics: ObjectLayoutMetrics;
+  onApply: (patch: ObjectLayoutPatch) => void;
+}): JSX.Element {
+  type LayoutField = 'x' | 'y' | 'width' | 'height';
+  const [values, setValues] = useState<Record<LayoutField, string>>(() => ({
+    x: String(Math.round(metrics.x)),
+    y: String(Math.round(metrics.y)),
+    width: String(Math.max(16, Math.round(metrics.width))),
+    height: String(Math.max(16, Math.round(metrics.height)))
+  }));
+  const [dirty, setDirty] = useState<Record<LayoutField, boolean>>({
+    x: false,
+    y: false,
+    width: false,
+    height: false
+  });
+  const [lockRatio, setLockRatio] = useState(node.kind === 'image');
+  const ratio = metrics.width / Math.max(1, metrics.height);
+  const setField = (field: LayoutField, rawValue: string) => {
+    let pairedField: LayoutField | undefined;
+    let pairedDraft: string | undefined;
+    if (
+      lockRatio &&
+      !metrics.lockHeight &&
+      !metrics.lockSize &&
+      (field === 'width' || field === 'height') &&
+      rawValue.trim()
+    ) {
+      const parsed = Number(rawValue);
+      if (Number.isFinite(parsed) && parsed >= 16 && parsed <= 20_000) {
+        pairedField = field === 'width' ? 'height' : 'width';
+        const pairedValue = field === 'width' ? parsed / ratio : parsed * ratio;
+        pairedDraft = String(Math.round(Math.max(16, Math.min(20_000, pairedValue))));
+      }
+    }
+    setDirty((current) => ({
+      ...current,
+      [field]: true,
+      ...(pairedField ? { [pairedField]: true } : {})
+    }));
+    setValues((current) => {
+      const next = { ...current, [field]: rawValue };
+      return pairedField && pairedDraft !== undefined
+        ? { ...next, [pairedField]: pairedDraft }
+        : next;
+    });
+  };
+  const parseField = (field: LayoutField, minimum: number, maximum: number) => {
+    if (!dirty[field]) return undefined;
+    const raw = values[field].trim();
+    const parsed = raw ? Number(raw) : Number.NaN;
+    return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum
+      ? parsed
+      : null;
+  };
+  const x = metrics.lockPosition ? undefined : parseField('x', -100_000, 100_000);
+  const y = metrics.lockPosition ? undefined : parseField('y', -100_000, 100_000);
+  const width = metrics.lockSize ? undefined : parseField('width', 16, 20_000);
+  const height = metrics.lockSize || metrics.lockHeight
+    ? undefined
+    : parseField('height', 16, 20_000);
+  const offsetX = typeof x === 'number' ? metrics.offsetX + x - metrics.x : undefined;
+  const offsetY = typeof y === 'number' ? metrics.offsetY + y - metrics.y : undefined;
+  const invalid =
+    x === null ||
+    y === null ||
+    width === null ||
+    height === null ||
+    (offsetX !== undefined && Math.abs(offsetX) > 50_000) ||
+    (offsetY !== undefined && Math.abs(offsetY) > 50_000);
+  const hasChanges = [x, y, width, height].some((value) => typeof value === 'number');
+  const buildPatch = (): ObjectLayoutPatch | undefined => {
+    if (invalid || !hasChanges) return undefined;
+    return {
+      nodeId: node.id,
+      ...(offsetX !== undefined ? { offsetX } : {}),
+      ...(offsetY !== undefined ? { offsetY } : {}),
+      ...(offsetX !== undefined || offsetY !== undefined
+        ? {
+            baseTranslateX: metrics.baseTranslateX,
+            baseTranslateY: metrics.baseTranslateY
+          }
+        : {}),
+      ...(typeof width === 'number' ? { width } : {}),
+      ...(typeof height === 'number' ? { height } : {})
+    };
+  };
+  const applyDraft = () => {
+    const patch = buildPatch();
+    if (!patch) return;
+    onApply(patch);
+    setDirty({ x: false, y: false, width: false, height: false });
+  };
+  const invalidField = (field: LayoutField) => {
+    if (!dirty[field]) return false;
+    if ((field === 'x' || field === 'y') && metrics.lockPosition) return false;
+    if ((field === 'width' || field === 'height') && metrics.lockSize) return false;
+    if (field === 'height' && metrics.lockHeight) return false;
+    const value = field === 'x' || field === 'y'
+      ? parseField(field, -100_000, 100_000)
+      : parseField(field, 16, 20_000);
+    return value === null;
+  };
+  return (
+    <section className="layout-inspector" aria-label="Size and position">
+      <div className="style-title">Size &amp; Position</div>
+      <div className="layout-field-grid">
+        <label className="field compact-field">
+          <span>X</span>
+          <input
+            aria-label="Object X position"
+            type="number"
+            min={-100000}
+            max={100000}
+            value={values.x}
+            disabled={metrics.lockPosition}
+            aria-invalid={invalidField('x')}
+            onChange={(event) => setField('x', event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') applyDraft(); }}
+          />
+        </label>
+        <label className="field compact-field">
+          <span>Y</span>
+          <input
+            aria-label="Object Y position"
+            type="number"
+            min={-100000}
+            max={100000}
+            value={values.y}
+            disabled={metrics.lockPosition}
+            aria-invalid={invalidField('y')}
+            onChange={(event) => setField('y', event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') applyDraft(); }}
+          />
+        </label>
+        <label className="field compact-field">
+          <span>W</span>
+          <input
+            aria-label="Object width"
+            type="number"
+            min={16}
+            max={20000}
+            value={values.width}
+            disabled={metrics.lockSize}
+            aria-invalid={invalidField('width')}
+            onChange={(event) => setField('width', event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') applyDraft(); }}
+          />
+        </label>
+        <label className="field compact-field">
+          <span>H</span>
+          <input
+            aria-label="Object height"
+            type="number"
+            min={16}
+            max={20000}
+            value={values.height}
+            disabled={metrics.lockHeight || metrics.lockSize}
+            aria-invalid={invalidField('height')}
+            onChange={(event) => setField('height', event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') applyDraft(); }}
+          />
+        </label>
+      </div>
+      <label className="layout-ratio-toggle">
+        <input
+          type="checkbox"
+          checked={lockRatio}
+          disabled={metrics.lockHeight || metrics.lockSize}
+          onChange={(event) => setLockRatio(event.target.checked)}
+        />
+        Lock aspect ratio
+      </label>
+      {metrics.lockHeight && (
+        <p className="layout-hint">표 높이는 내용에 맞춰 자동 조절됩니다.</p>
+      )}
+      {metrics.lockSize && (
+        <p className="layout-hint">복합 변형이 적용된 개체는 안전을 위해 크기 조절을 잠갔습니다.</p>
+      )}
+      {metrics.lockPosition && (
+        <p className="layout-hint">고정 위치 또는 복합 이동 개체는 X/Y 편집을 지원하지 않습니다.</p>
+      )}
+      {invalid && (
+        <p className="layout-hint layout-error" role="alert">입력 범위를 확인하세요.</p>
+      )}
+      <div className="layout-actions">
+        <button
+          type="button"
+          className="blue-button"
+          disabled={invalid || !hasChanges}
+          onClick={applyDraft}
+        >
+          Apply Layout
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={Math.abs(metrics.offsetX) < 0.001 && Math.abs(metrics.offsetY) < 0.001}
+          onClick={() => onApply({ nodeId: node.id, resetPosition: true })}
+        >
+          Reset Position
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -824,6 +1057,7 @@ function ImageInspector({
   });
   const [lockImageRatio, setLockImageRatio] = useState(true);
   const [lockFrameRatio, setLockFrameRatio] = useState(true);
+  const hasFrame = node.image?.hasFrame === true;
   const [annotation, setAnnotation] = useState('');
   const [tone, setTone] = useState<'note' | 'warning' | 'box'>('note');
 
@@ -918,6 +1152,7 @@ function ImageInspector({
             <input
               type="number"
               min={1}
+              disabled={!hasFrame}
               value={frameSize.width || ''}
               onChange={(event) => {
                 const nextSize = { ...frameSize, width: Number(event.target.value) };
@@ -930,6 +1165,7 @@ function ImageInspector({
             <input
               type="number"
               min={1}
+              disabled={!hasFrame}
               value={frameSize.height || ''}
               onChange={(event) => {
                 const nextSize = { ...frameSize, height: Number(event.target.value) };
@@ -940,6 +1176,7 @@ function ImageInspector({
           <label className="field compact-field">
             <span>Unit</span>
             <select
+              disabled={!hasFrame}
               value={frameSize.unit}
               onChange={(event) => setFrameSize({ ...frameSize, unit: event.target.value as ImageResizeSettings['unit'] })}
             >
@@ -952,11 +1189,13 @@ function ImageInspector({
           <input
             type="checkbox"
             checked={lockFrameRatio}
+            disabled={!hasFrame}
             onChange={(event) => setLockFrameRatio(event.target.checked)}
           />
           Lock ratio
         </label>
-        <button type="button" onClick={() => onResizeImageFrame(node.id, frameSize)}>
+        {!hasFrame && <p className="layout-hint">이 이미지에는 별도 프레임이 없습니다.</p>}
+        <button type="button" disabled={!hasFrame} onClick={() => onResizeImageFrame(node.id, frameSize)}>
           Apply Frame Size
         </button>
       </div>

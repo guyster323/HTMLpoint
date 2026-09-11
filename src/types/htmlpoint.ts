@@ -28,6 +28,7 @@ export interface ImageSnapshot {
   frameWidth?: string;
   frameHeight?: string;
   frameStyle?: string;
+  hasFrame?: boolean;
 }
 
 export interface TextStyleSnapshot {
@@ -69,6 +70,8 @@ export interface EditableNode {
   tagName: string;
   label: string;
   path: number[];
+  /** DOM path of the visual object moved/resized for this content node. */
+  layoutTargetPath?: number[];
   text: string;
   html: string;
   selector?: string;
@@ -92,7 +95,44 @@ export interface SelectionVisualSnapshot {
     height?: string;
     style?: string;
   };
+  layoutMetrics?: ObjectLayoutMetrics;
 }
+
+export interface ObjectLayoutMetrics {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  offsetX: number;
+  offsetY: number;
+  baseTranslateX: number;
+  baseTranslateY: number;
+  lockHeight?: boolean;
+  lockSize?: boolean;
+  lockPosition?: boolean;
+}
+
+export interface ObjectLayoutPatch {
+  nodeId: string;
+  offsetX?: number;
+  offsetY?: number;
+  baseTranslateX?: number;
+  baseTranslateY?: number;
+  width?: number;
+  height?: number;
+  resetPosition?: boolean;
+}
+
+export type ObjectLayoutCommand =
+  | 'align-left'
+  | 'align-center'
+  | 'align-right'
+  | 'align-top'
+  | 'align-middle'
+  | 'align-bottom'
+  | 'distribute-horizontal'
+  | 'distribute-vertical'
+  | 'reset-position';
 
 export interface AssetRef {
   id: string;
@@ -117,6 +157,7 @@ export interface EditOperation {
     | 'table'
     | 'image'
     | 'chart'
+    | 'layout'
     | 'section'
     | 'serialize';
   label: string;

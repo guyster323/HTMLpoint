@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Layers, MousePointer2 } from 'lucide-react';
 import { buildPreviewHtml, sourcePathToBaseUrl } from '../lib/preview';
-import { EditableNode, ReportDocument } from '../types/htmlpoint';
+import { semanticLayoutNodes, semanticRepresentativeId } from '../lib/objectLayout';
+import { EditableNode, ObjectLayoutCommand, ReportDocument } from '../types/htmlpoint';
 
 const PAGE_WIDTH = 1120;
 const STAGE_PADDING = 28;
@@ -28,6 +29,7 @@ interface CanvasProps {
   previewRevision?: string;
   imageArrowModeNodeId?: string;
   imageMosaicModeNodeId?: string;
+  layoutCommand?: { id: number; command: ObjectLayoutCommand };
   zoom: number;
   fitMode?: boolean;
   onFitZoomChange?: (zoom: number) => void;
@@ -51,6 +53,7 @@ export function Canvas({
   previewRevision,
   imageArrowModeNodeId,
   imageMosaicModeNodeId,
+  layoutCommand,
   zoom,
   fitMode = false,
   onFitZoomChange,
@@ -190,7 +193,31 @@ export function Canvas({
   const postImageMosaicModeToPreview = useCallback(() => {
     iframeRef.current?.contentWindow?.postMessage({ source: 'htmlpoint-editor', type: 'htmlpoint-set-image-mosaic-mode', nodeId: imageMosaicModeNodeId }, '*');
   }, [imageMosaicModeNodeId]);
-
+  const postLayoutCommandToPreview = useCallback(() => {
+    if (!layoutCommand || !previewRevision) {
+      return;
+    }
+    iframeRef.current?.contentWindow?.postMessage(
+      {
+        source: 'htmlpoint-editor',
+        type: 'htmlpoint-run-layout-command',
+        previewRevision,
+        commandId: layoutCommand.id,
+        command: layoutCommand.command
+      },
+      '*'
+    );
+  }, [layoutCommand, previewRevision]);
+  const postZoomToPreview = useCallback(() => {
+    iframeRef.current?.contentWindow?.postMessage(
+      {
+        source: 'htmlpoint-editor',
+        type: 'htmlpoint-set-editor-zoom',
+        zoom
+      },
+      '*'
+    );
+  }, [zoom]);
   useEffect(() => {
     postSelectionToPreview();
   }, [postSelectionToPreview]);
@@ -199,7 +226,8 @@ export function Canvas({
     postImageArrowModeToPreview();
   }, [postImageArrowModeToPreview]);
   useEffect(() => { postImageMosaicModeToPreview(); }, [postImageMosaicModeToPreview]);
-
+  useEffect(() => { postLayoutCommandToPreview(); }, [postLayoutCommandToPreview]);
+  useEffect(() => { postZoomToPreview(); }, [postZoomToPreview]);
   return (
     <main className="canvas-region">
       <div className="canvas-toolbar">
@@ -207,9 +235,12 @@ export function Canvas({
           <span className="section-kicker">{section?.kind === 'header' ? 'Header' : 'Section'}</span>
           <strong>{section?.title || 'No document loaded'}</strong>
         </div>
-        <div className="canvas-mode">
+        <div
+          className="canvas-mode"
+          title="Shift: constrain movement · Alt: temporarily disable snapping · Arrow keys: nudge"
+        >
           <MousePointer2 size={15} />
-          Layout-safe edit
+          Select · Drag to move · Double-click to edit
         </div>
       </div>
       <div ref={stageRef} className="canvas-stage">
@@ -236,6 +267,8 @@ export function Canvas({
                   postSelectionToPreview();
                   postImageArrowModeToPreview();
                   postImageMosaicModeToPreview();
+                  postLayoutCommandToPreview();
+                  postZoomToPreview();
                   if (previewHtml) onPreviewReady?.();
                 }}
               />
@@ -269,7 +302,13 @@ function ElementStrip({
   selectedNodeIds: string[];
   onSelectNode: (nodeId: string, additive?: boolean) => void;
 }): JSX.Element {
-  const selectedSet = new Set(selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []);
+  const objectNodes = semanticLayoutNodes(nodes);
+  const selectedSet = new Set(
+    (selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : [])
+      .map((nodeId) => semanticRepresentativeId(nodes, nodeId))
+      .filter((nodeId): nodeId is string => Boolean(nodeId))
+  );
+  const activeObjectId = semanticRepresentativeId(nodes, selectedNodeId);
   const activeChipRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -277,19 +316,21 @@ function ElementStrip({
     if (typeof activeChip?.scrollIntoView === 'function') {
       activeChip.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
-  }, [selectedNodeId]);
-
+  }, [activeObjectId]);
   return (
     <div className="element-strip">
       <div className="element-strip-title">Objects</div>
       <div className="element-list">
-        {nodes.map((node) => (
+        {objectNodes.map((node) => (
           <button
             type="button"
             key={node.id}
-            ref={node.id === selectedNodeId ? activeChipRef : undefined}
+            ref={node.id === activeObjectId ? activeChipRef : undefined}
             className={selectedSet.has(node.id) ? 'object-chip active' : 'object-chip'}
-            onClick={(event) => onSelectNode(node.id, event.ctrlKey || event.metaKey)}
+            aria-pressed={selectedSet.has(node.id)}
+            onClick={(event) =>
+              onSelectNode(node.id, event.ctrlKey || event.metaKey || event.shiftKey)
+            }
           >
             <span>{node.kind}</span>
             {node.label}

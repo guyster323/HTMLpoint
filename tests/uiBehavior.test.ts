@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { App } from '../src/App';
 import { ChangeSummaryTimeline } from '../src/components/ChangeSummaryTimeline';
 import { PropertiesPanel } from '../src/components/PropertiesPanel';
-import { Ribbon } from '../src/components/Ribbon';
+import { getRibbonGroupsForTab, Ribbon } from '../src/components/Ribbon';
 import { StatusBar } from '../src/components/StatusBar';
 import { buildPreviewHtml, buildPreviewSelectionPayload, buildThumbnailHtml } from '../src/lib/preview';
 import { resizeWithAspectLock } from '../src/lib/imageSizing';
@@ -71,7 +71,17 @@ describe('interactive UI behavior helpers', () => {
     expect(preview).toContain('htmlpoint-select-node');
     expect(preview).toContain(selectedNode.id);
   });
+  it('emits a syntactically valid preview runtime script', () => {
+    const report = parseReportHtml(html);
+    const preview = buildPreviewHtml(report, report.sections[0].id, 'ko');
+    const previewDocument = new DOMParser().parseFromString(preview, 'text/html');
+    const runtime = previewDocument.querySelector<HTMLScriptElement>(
+      'script[data-htmlpoint-preview-runtime]'
+    )?.textContent;
 
+    expect(runtime).toBeTruthy();
+    expect(() => new Function(runtime ?? '')).not.toThrow();
+  });
   it('sends computed object values from the preview when a canvas object is selected', () => {
     const report = parseReportHtml(html);
     const selectedNode = report.sections[0].editableNodes.find((node) => node.text.includes('현장'))!;
@@ -173,6 +183,99 @@ describe('interactive UI behavior helpers', () => {
     expect(preview).toContain('htmlpoint-select-nodes');
     expect(preview).toContain('ctrlKey');
     expect(preview).toContain('htmlpoint-marquee');
+  });
+  it('injects PowerPoint-style move, eight-handle resize, snap, keyboard, and arrange behavior', () => {
+    const report = parseReportHtml(html);
+    const node = report.sections[0].editableNodes[0];
+    const preview = buildPreviewHtml(report, report.sections[0].id, 'ko', node.id);
+
+    ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].forEach((direction) => {
+      expect(preview).toContain(`htmlpoint-select-handle-${direction}`);
+    });
+    expect(preview).toContain('beginMoveGesture');
+    expect(preview).toContain('beginResizeGesture');
+    expect(preview).toContain('htmlpoint-commit-layout');
+    expect(preview).toContain('htmlpoint-layout-guide');
+    expect(preview).toContain('htmlpoint-run-layout-command');
+    expect(preview).toContain('htmlpoint-set-editor-zoom');
+    expect(preview).toContain('--htmlpoint-handle-scale');
+    expect(preview).toContain('handleLayoutKeyboard');
+    expect(preview).toContain('Math.hypot(rawX, rawY) < 4');
+  });
+  it('exposes a dedicated Arrange ribbon with alignment and distribution controls', () => {
+    expect(getRibbonGroupsForTab('Arrange').map((group) => group.title)).toEqual([
+      'Align',
+      'Distribute',
+      'Position'
+    ]);
+    const report = makeUiReport();
+    const onArrange = vi.fn();
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      act(() => root.render(React.createElement(Ribbon, ribbonProps(report, {
+        activeTab: 'Arrange',
+        selectedObjectCount: 3,
+        onArrange
+      }))));
+      const center = buttonWithText(container, 'Center');
+      const horizontal = buttonWithText(container, 'Horizontal');
+      expect(center.disabled).toBe(false);
+      expect(horizontal.disabled).toBe(false);
+      act(() => center.click());
+      act(() => horizontal.click());
+      expect(onArrange).toHaveBeenNthCalledWith(1, 'align-center');
+      expect(onArrange).toHaveBeenNthCalledWith(2, 'distribute-horizontal');
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+  it('renders numeric Size & Position controls as a non-pointer editing alternative', () => {
+    const report = makeUiReport();
+    const node = report.sections[0].editableNodes.find((candidate) => candidate.tagName === 'p')!;
+    const onObjectLayout = vi.fn();
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      act(() => root.render(React.createElement(PropertiesPanel, {
+        ...propertiesProps(report, node.id),
+        selectedLayoutMetrics: {
+          x: 20,
+          y: 30,
+          width: 240,
+          height: 80,
+          offsetX: 5,
+          offsetY: 0,
+          baseTranslateX: 0,
+          baseTranslateY: 0
+        },
+        onObjectLayout
+      })));
+      expect(container.querySelector('[aria-label="Object X position"]')).not.toBeNull();
+      expect(container.querySelector('[aria-label="Object width"]')).not.toBeNull();
+      const apply = buttonWithText(container, 'Apply Layout');
+      expect(apply.disabled).toBe(true);
+      const xInput = container.querySelector<HTMLInputElement>('[aria-label="Object X position"]')!;
+      act(() => setInputValue(xInput, '25'));
+      expect(apply.disabled).toBe(false);
+      act(() => apply.click());
+      expect(onObjectLayout).toHaveBeenNthCalledWith(1, {
+        nodeId: node.id,
+        offsetX: 10,
+        baseTranslateX: 0,
+        baseTranslateY: 0
+      });
+      expect(onObjectLayout.mock.calls[0][0]).not.toHaveProperty('width');
+      expect(onObjectLayout.mock.calls[0][0]).not.toHaveProperty('height');
+      act(() => buttonWithText(container, 'Reset Position').click());
+      expect(onObjectLayout).toHaveBeenNthCalledWith(2, { nodeId: node.id, resetPosition: true });
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
   });
 
   it('builds delayed custom tooltip attributes for toolbar buttons', () => {
@@ -810,7 +913,11 @@ function buttonWithText(container: ParentNode, text: string): HTMLButtonElement 
   }
   return button;
 }
-
+function setInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
 function openedReport(fileName: string, title: string): BridgeOpenedFile {
   return {
     fileName,

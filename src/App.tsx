@@ -14,6 +14,7 @@ import {
   addImageMosaic,
   addTableColumn,
   addTableRow,
+  applyObjectLayouts,
   applyTextEffect,
   applyTextStyleToNodes,
   applyImageFilter,
@@ -42,6 +43,12 @@ import {
   updateChartPresentation,
   updateTranslationText
 } from './lib/editing';
+import {
+  normalizeSemanticLayoutSelection,
+  semanticLayoutNodes,
+  semanticLayoutSelectionCount,
+  semanticRepresentativeId
+} from './lib/objectLayout';
 import {
   createAutoBackup,
   openHtmlDialog,
@@ -94,6 +101,9 @@ import {
   EditableNode,
   ImageFilterSettings,
   ImageResizeSettings,
+  ObjectLayoutCommand,
+  ObjectLayoutMetrics,
+  ObjectLayoutPatch,
   ReportDocument,
   SelectionVisualSnapshot,
   TextEffectSettings,
@@ -132,6 +142,10 @@ export function App(): JSX.Element {
   const [imageArrowModeNodeId, setImageArrowModeNodeId] = useState<string>();
   const [imageMosaicModeNodeId, setImageMosaicModeNodeId] = useState<string>();
   const [previewNavigationNonce, setPreviewNavigationNonce] = useState(0);
+  const [layoutCommand, setLayoutCommand] = useState<{
+    id: number;
+    command: ObjectLayoutCommand;
+  }>();
   const [focusedOutline, setFocusedOutline] = useState<{
     sectionId: string;
     path: number[];
@@ -142,6 +156,7 @@ export function App(): JSX.Element {
   }>();
   const reportRef = useRef(report);
   const insertionRequestCounterRef = useRef(0);
+  const layoutCommandCounterRef = useRef(0);
   const dragDepthRef = useRef(0);
   const pendingDocumentActionRef = useRef<PendingDocumentAction | null>(null);
   const documentActionBusyRef = useRef(false);
@@ -308,9 +323,17 @@ export function App(): JSX.Element {
   const effectiveSelectedNode = sameKindSelection
     ? mergeNodeSnapshot(selectedNode, selectedNodeId ? selectionSnapshots[selectedNodeId] : undefined)
     : undefined;
+  const effectiveSelectedLayoutMetrics = normalizeObjectLayoutMetrics(
+    selectedNodeId ? selectionSnapshots[selectedNodeId]?.layoutMetrics : undefined
+  );
+  const selectedObjectCount = selectedSection
+    ? semanticLayoutSelectionCount(selectedSection.editableNodes, selectedNodeIds)
+    : 0;
+  const layoutSelectionKey = `${selectedSectionId ?? ''}|${selectedNodeId ?? ''}|${selectedNodeIds.join('|')}`;
 
   useEffect(() => {
     setSelectionSnapshots({});
+    setLayoutCommand(undefined);
   }, [report?.id, report?.updatedAt]);
   useEffect(() => {
     if (
@@ -331,7 +354,11 @@ export function App(): JSX.Element {
   useEffect(() => {
     setImageArrowModeNodeId(undefined);
     setImageMosaicModeNodeId(undefined);
+    setLayoutCommand(undefined);
   }, [selectedSectionId]);
+  useEffect(() => {
+    setLayoutCommand(undefined);
+  }, [layoutSelectionKey]);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -356,12 +383,14 @@ export function App(): JSX.Element {
         const section = getVisibleSections(currentReport).find(
           (candidate) => candidate.id === event.data.sectionId
         );
-        const node = section?.editableNodes.find(
+        const clickedNode = section?.editableNodes.find(
           (candidate) => candidate.id === event.data.nodeId
         );
-        if (!section || !node) {
+        if (!section || !clickedNode) {
           return;
         }
+        const nodeId = semanticRepresentativeId(section.editableNodes, clickedNode.id) ?? clickedNode.id;
+        const node = section.editableNodes.find((candidate) => candidate.id === nodeId) ?? clickedNode;
         setFocusedOutline({ sectionId: section.id, path: node.path });
         setSelection({
           sectionId: section.id,
@@ -500,17 +529,33 @@ export function App(): JSX.Element {
         if (!shouldApplyPreviewSelectionState(event.data)) {
           return;
         }
-        const nextSelectedIds = Array.isArray(event.data.selectedNodeIds)
+        const requestedNodeIds = Array.isArray(event.data.selectedNodeIds)
           ? event.data.selectedNodeIds.filter((nodeId: unknown): nodeId is string =>
               typeof nodeId === 'string' &&
               Boolean(selectedSection?.editableNodes.some((node) => node.id === nodeId))
             )
           : [event.data.nodeId];
+        const normalizedSelection = normalizeSemanticLayoutSelection(
+          selectedSection.editableNodes,
+          requestedNodeIds,
+          event.data.nodeId
+        );
+        const nextSelectedIds = normalizedSelection.nodeIds;
+        const nextPrimaryNodeId = normalizedSelection.primaryNodeId ?? event.data.nodeId;
         setSelection((current) => ({
           ...current,
-          nodeId: nextSelectedIds[0] ?? event.data.nodeId,
-          nodeIds: nextSelectedIds.length ? nextSelectedIds : [event.data.nodeId]
+          nodeId: nextPrimaryNodeId,
+          nodeIds: nextSelectedIds.length ? nextSelectedIds : [nextPrimaryNodeId]
         }));
+        const selectedLabel = selectedSection.editableNodes.find(
+          (node) => node.id === nextPrimaryNodeId
+        )?.label;
+        setMessage({
+          kind: 'status',
+          text: nextSelectedIds.length > 1
+            ? `개체 ${nextSelectedIds.length}개를 선택했습니다.`
+            : `‘${selectedLabel ?? '개체'}’을(를) 선택했습니다.`
+        });
         return;
       }
       if (event.data.type === 'htmlpoint-select-nodes' && Array.isArray(event.data.nodeIds)) {
@@ -526,17 +571,101 @@ export function App(): JSX.Element {
         if (!shouldApplyPreviewSelectionState(event.data)) {
           return;
         }
-        const nextSelectedIds = event.data.nodeIds.filter((nodeId: unknown): nodeId is string =>
+        const requestedNodeIds = event.data.nodeIds.filter((nodeId: unknown): nodeId is string =>
           typeof nodeId === 'string' &&
           Boolean(selectedSection?.editableNodes.some((node) => node.id === nodeId))
         );
+        const normalizedSelection = selectedSection
+          ? normalizeSemanticLayoutSelection(
+              selectedSection.editableNodes,
+              requestedNodeIds,
+              requestedNodeIds[0]
+            )
+          : { nodeIds: [], primaryNodeId: undefined };
+        const nextSelectedIds = normalizedSelection.nodeIds;
         if (nextSelectedIds.length) {
           setSelection((current) => ({
             ...current,
-            nodeId: nextSelectedIds[0],
+            nodeId: normalizedSelection.primaryNodeId ?? nextSelectedIds[0],
             nodeIds: nextSelectedIds
           }));
+          setMessage({
+            kind: 'status',
+            text: nextSelectedIds.length > 1
+              ? `개체 ${nextSelectedIds.length}개를 선택했습니다.`
+              : '개체 1개를 선택했습니다.'
+          });
         }
+        return;
+      }
+      if (
+        event.data.type === 'htmlpoint-clear-selection' &&
+        event.data.sectionId === selectedSectionId
+      ) {
+        setSelection((current) => ({
+          ...current,
+          nodeId: undefined,
+          nodeIds: []
+        }));
+        return;
+      }
+      if (event.data.type === 'htmlpoint-layout-command-unavailable') {
+        setLayoutCommand((current) =>
+          current?.id === event.data.commandId ? undefined : current
+        );
+        setMessage({
+          kind: 'status',
+          text:
+            typeof event.data.reason === 'string' && event.data.reason.length <= 160
+              ? event.data.reason
+              : '이 배치 명령을 현재 선택에 적용할 수 없습니다.'
+        });
+        return;
+      }
+      if (
+        event.data.type === 'htmlpoint-commit-layout' &&
+        event.data.sectionId === selectedSectionId &&
+        selectedSectionId &&
+        selectedSection
+      ) {
+        const sectionId = selectedSectionId;
+        const patches = normalizePreviewLayoutPatches(
+          event.data.patches,
+          selectedSection
+        );
+        if (!patches) {
+          setPreviewNavigationNonce((current) => current + 1);
+          setMessage({ kind: 'error', text: '유효하지 않은 개체 배치 요청을 차단했습니다.' });
+          return;
+        }
+        const label = normalizeLayoutLabel(event.data.label);
+        setLayoutCommand((current) =>
+          current?.id === event.data.commandId ? undefined : current
+        );
+        const currentReport = reportRef.current;
+        if (!currentReport) {
+          return;
+        }
+        const appliedReport = applyObjectLayouts(
+          currentReport,
+          sectionId,
+          patches,
+          label
+        );
+        if (appliedReport === currentReport) {
+          setPreviewNavigationNonce((current) => current + 1);
+          setMessage({ kind: 'status', text: '변경할 개체 배치 값이 없습니다.' });
+          return;
+        }
+        commit((current) =>
+          current === currentReport
+            ? appliedReport
+            : applyObjectLayouts(current, sectionId, patches, label)
+        );
+        setMessage({
+          kind: 'status',
+          text: `${label} · Ctrl+Z로 되돌릴 수 있습니다.`
+        });
         return;
       }
       if (
@@ -670,6 +799,7 @@ export function App(): JSX.Element {
       setFocusedOutline(undefined);
       setImageArrowModeNodeId(undefined);
       setImageMosaicModeNodeId(undefined);
+      setLayoutCommand(undefined);
       setBackupPath(backup);
       setSelectionSnapshots({});
       const loadedMessage = successMessage ?? `${nextReport.fileName ?? nextReport.title} loaded`;
@@ -1018,14 +1148,22 @@ export function App(): JSX.Element {
       const next = exists
         ? current.nodeIds.filter((id) => id !== nodeId)
         : [...current.nodeIds, nodeId];
-      const nodeIds = next.length ? next : [nodeId];
+      const requestedNodeIds = next.length ? next : [nodeId];
+      const normalized = selectedSection
+        ? normalizeSemanticLayoutSelection(
+            selectedSection.editableNodes,
+            requestedNodeIds,
+            exists ? requestedNodeIds[0] : nodeId
+          )
+        : { nodeIds: requestedNodeIds, primaryNodeId: nodeId };
+      const nodeIds = normalized.nodeIds.length ? normalized.nodeIds : [nodeId];
       return {
         ...current,
-        nodeId: exists ? nodeIds[0] : nodeId,
+        nodeId: normalized.primaryNodeId ?? nodeIds[0],
         nodeIds
       };
     });
-  }, []);
+  }, [selectedSection]);
   const selectedTextNodeIds = useMemo(
     () =>
       (selectedNodes.length ? selectedNodes : selectedNode ? [selectedNode] : [])
@@ -1042,6 +1180,14 @@ export function App(): JSX.Element {
     },
     [commit, requireSection, selectedTextNodeIds]
   );
+  const handleArrange = useCallback((command: ObjectLayoutCommand) => {
+    if (!selectedSectionId || !selectedNodeIds.length) {
+      setMessage({ kind: 'status', text: '배치할 개체를 먼저 선택하세요.' });
+      return;
+    }
+    layoutCommandCounterRef.current += 1;
+    setLayoutCommand({ id: layoutCommandCounterRef.current, command });
+  }, [selectedNodeIds.length, selectedSectionId]);
   const handleReplaceImage = useCallback(
     async (nodeId: string) => {
       const image = await openImageAsDataUrl();
@@ -1152,6 +1298,7 @@ export function App(): JSX.Element {
         sectionHidden={sectionHidden}
         selectedKind={effectiveSelectedNode?.kind}
         selectedTextStyle={effectiveSelectedNode?.textStyle}
+        selectedObjectCount={selectedObjectCount}
         canUndo={past.length > 0}
         canRedo={future.length > 0}
         onTabChange={setActiveTab}
@@ -1246,8 +1393,10 @@ export function App(): JSX.Element {
         }}
         onLanguageChange={(language) => {
           setFocusedOutline(undefined);
+          setLayoutCommand(undefined);
           dispatchEditorSession({ type: 'set-language', language });
         }}
+        onArrange={handleArrange}
       />
       <div
         className={workspaceClassName}
@@ -1280,7 +1429,11 @@ export function App(): JSX.Element {
           onSelect={(sectionId, outlinePath) => {
             setPreviewNavigationNonce((current) => current + 1);
             const nextSection = report?.sections.find((section) => section.id === sectionId);
-            const firstNodeId = outlinePath ? undefined : nextSection?.editableNodes[0]?.id;
+            const firstNodeId = outlinePath
+              ? undefined
+              : nextSection
+                ? semanticLayoutNodes(nextSection.editableNodes)[0]?.id
+                : undefined;
             const outlineItem = outlinePath
               ? nextSection?.outlineItems?.find(
                   (item) => item.path.join('.') === outlinePath.join('.')
@@ -1317,6 +1470,7 @@ export function App(): JSX.Element {
           previewRevision={previewRevision}
           imageArrowModeNodeId={imageArrowModeNodeId}
           imageMosaicModeNodeId={imageMosaicModeNodeId}
+          layoutCommand={layoutCommand}
           zoom={zoom}
           fitMode={fitMode}
           onFitZoomChange={setZoom}
@@ -1356,6 +1510,8 @@ export function App(): JSX.Element {
           selectedNodeId={selectedNodeId}
           selectedNodeIds={selectedNodeIds}
           selectedNodeOverride={effectiveSelectedNode}
+          selectedLayoutMetrics={effectiveSelectedLayoutMetrics}
+          selectedObjectCount={selectedObjectCount}
           selectedCell={selectedCell}
           onNodeSelect={(nodeId) => handleSelectNode(nodeId, false)}
           onCellSelect={(row, cell) =>
@@ -1513,11 +1669,42 @@ export function App(): JSX.Element {
               commit((current) => updateChartData(current, sectionId, nodeId, rows));
             }
           }}
+          onObjectLayout={(patch) => {
+            const sectionId = requireSection();
+            if (sectionId) {
+              const currentReport = reportRef.current;
+              if (!currentReport) {
+                return;
+              }
+              const appliedReport = applyObjectLayouts(
+                currentReport,
+                sectionId,
+                [patch],
+                '개체 크기 및 위치 입력'
+              );
+              if (appliedReport === currentReport) {
+                setMessage({ kind: 'status', text: '변경할 크기 또는 위치 값이 없습니다.' });
+              } else {
+                commit((current) =>
+                  current === currentReport
+                    ? appliedReport
+                    : applyObjectLayouts(
+                        current,
+                        sectionId,
+                        [patch],
+                        '개체 크기 및 위치 입력'
+                      )
+                );
+                setMessage({ kind: 'status', text: '개체 크기와 위치를 적용했습니다.' });
+              }
+            }
+          }}
         />
       </div>
       <div
         className="message-line"
         role={message.kind === 'error' ? 'alert' : 'status'}
+        aria-atomic="true"
         aria-live={message.kind === 'status' ? 'polite' : undefined}
       >
         <span>{message.text}</span>
@@ -1648,6 +1835,137 @@ interface PendingSaveWarning {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+function normalizePreviewLayoutPatches(
+  value: unknown,
+  section: { editableNodes: EditableNode[] }
+): ObjectLayoutPatch[] | undefined {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 256) {
+    return undefined;
+  }
+  const validNodeIds = new Set(section.editableNodes.map((node) => node.id));
+  const normalized: ObjectLayoutPatch[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== 'object') {
+      return undefined;
+    }
+    const patch = candidate as Record<string, unknown>;
+    if (typeof patch.nodeId !== 'string' || !validNodeIds.has(patch.nodeId)) {
+      return undefined;
+    }
+    const readNumber = (
+      key: 'offsetX' | 'offsetY' | 'baseTranslateX' | 'baseTranslateY' | 'width' | 'height',
+      minimum: number,
+      maximum: number
+    ): number | undefined | null => {
+      const raw = patch[key];
+      if (raw === undefined) {
+        return undefined;
+      }
+      return typeof raw === 'number' && Number.isFinite(raw) && raw >= minimum && raw <= maximum
+        ? raw
+        : null;
+    };
+    const offsetX = readNumber('offsetX', -50_000, 50_000);
+    const offsetY = readNumber('offsetY', -50_000, 50_000);
+    const baseTranslateX = readNumber('baseTranslateX', -50_000, 50_000);
+    const baseTranslateY = readNumber('baseTranslateY', -50_000, 50_000);
+    const width = readNumber('width', 16, 20_000);
+    const height = readNumber('height', 16, 20_000);
+    if (
+      offsetX === null ||
+      offsetY === null ||
+      baseTranslateX === null ||
+      baseTranslateY === null ||
+      width === null ||
+      height === null
+    ) {
+      return undefined;
+    }
+    const resetPosition = patch.resetPosition === true;
+    if (
+      !resetPosition &&
+      offsetX === undefined &&
+      offsetY === undefined &&
+      width === undefined &&
+      height === undefined
+    ) {
+      return undefined;
+    }
+    normalized.push({
+      nodeId: patch.nodeId,
+      ...(offsetX !== undefined ? { offsetX } : {}),
+      ...(offsetY !== undefined ? { offsetY } : {}),
+      ...(baseTranslateX !== undefined ? { baseTranslateX } : {}),
+      ...(baseTranslateY !== undefined ? { baseTranslateY } : {}),
+      ...(width !== undefined ? { width } : {}),
+      ...(height !== undefined ? { height } : {}),
+      ...(resetPosition ? { resetPosition: true } : {})
+    });
+  }
+  return normalized;
+}
+
+function normalizeLayoutLabel(value: unknown): string {
+  const allowed = new Set([
+    '개체 이동',
+    '개체 그룹 이동',
+    '개체 미세 이동',
+    '개체 그룹 미세 이동',
+    '개체 크기 조절',
+    '개체 정렬',
+    '개체 위치 초기화',
+    '개체 그룹 위치 초기화'
+  ]);
+  return typeof value === 'string' && allowed.has(value) ? value : '개체 배치 변경';
+}
+
+function normalizeObjectLayoutMetrics(value: unknown): ObjectLayoutMetrics | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const candidate = value as Record<string, unknown>;
+  const readFinite = (key: keyof ObjectLayoutMetrics, minimum: number, maximum: number) => {
+    const raw = candidate[key];
+    return typeof raw === 'number' && Number.isFinite(raw) && raw >= minimum && raw <= maximum
+      ? raw
+      : undefined;
+  };
+  const x = readFinite('x', -100_000, 100_000);
+  const y = readFinite('y', -100_000, 100_000);
+  const width = readFinite('width', 0, 20_000);
+  const height = readFinite('height', 0, 20_000);
+  const offsetX = readFinite('offsetX', -50_000, 50_000);
+  const offsetY = readFinite('offsetY', -50_000, 50_000);
+  const baseTranslateX = readFinite('baseTranslateX', -50_000, 50_000);
+  const baseTranslateY = readFinite('baseTranslateY', -50_000, 50_000);
+  if (
+    x === undefined ||
+    y === undefined ||
+    width === undefined ||
+    height === undefined ||
+    offsetX === undefined ||
+    offsetY === undefined ||
+    baseTranslateX === undefined ||
+    baseTranslateY === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    x,
+    y,
+    width,
+    height,
+    offsetX,
+    offsetY,
+    baseTranslateX,
+    baseTranslateY,
+    lockHeight: candidate.lockHeight === true,
+    lockSize: candidate.lockSize === true,
+    lockPosition: candidate.lockPosition === true
+  };
+}
+
 function isSelectionSnapshot(value: unknown): value is SelectionVisualSnapshot {
   return Boolean(
     value &&

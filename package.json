@@ -1,6 +1,6 @@
 {
   "name": "htmlpoint",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Offline Windows portable HTML report editor with a PowerPoint-style shell.",
   "main": "dist-electron/main.js",
   "type": "module",

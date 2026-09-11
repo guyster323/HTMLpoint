@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 - 2026-09-11
+
+### Added
+
+- PowerPoint-style pointer movement with axis locking, optional smart snapping, and alignment guides.
+- Eight resize handles for single objects, with safe width-only resizing for content-sized tables.
+- Marquee and additive multi-selection, group movement, alignment, and horizontal or vertical distribution.
+- Arrange commands for edge/center alignment, distribution, and resetting editor position offsets.
+- Numeric X/Y/W/H controls with aspect-ratio locking and validation in the Properties panel.
+- Keyboard object navigation and editing with Tab, Enter/F2, Arrow, and Shift+Arrow shortcuts.
+
+### Changed
+
+- Objects and Properties now present one semantic visual object for table cells, nested inline text, image frames, and generated table wrappers.
+- Completed layout gestures are persisted atomically as one undoable history entry without changing source DOM order.
+- Authored translations and responsive dimensions remain untouched until their corresponding layout field is explicitly edited.
+
+### Fixed
+
+- Pointer cancellation, capture loss, iframe blur, and Escape now clean up drag, resize, marquee, arrow, and mosaic interactions.
+- Hidden or closed-disclosure content no longer participates in marquee selection, Select All, snapping, or Arrange commands.
+- Existing inline `translate` values survive move, image annotation wrapping, effect changes, and position reset.
+- Dynamic table representatives resolve to the table instead of an arbitrary cell, including cross-Section selection.
+- Repeated keyboard nudges commit once and cannot race with a later pointer or Arrange gesture.
+
 ## 0.2.1 - 2026-09-10
 
 ### Added

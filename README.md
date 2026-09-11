@@ -13,7 +13,7 @@ PowerPoint 스타일의 셸 인터페이스를 기반으로 하는 오프라인 
    - `HTMLpoint-Portable-<version>-x64.exe`: 설치 권한이 없는 PC에서 사용하는 단일 실행 파일입니다.
 3. 같은 Release의 `SHA256SUMS.txt`로 다운로드 파일의 무결성을 확인할 수 있습니다.
 
-> 아직 Release가 보이지 않는 경우 유지관리자가 `v0.2.1` 같은 버전 태그를 push해야 합니다. 태그가 생성되면 GitHub Actions가 테스트, Windows 빌드, SHA-256 생성, Release 게시를 자동으로 수행합니다.
+> 아직 Release가 보이지 않는 경우 유지관리자가 `v0.3.0` 같은 버전 태그를 push해야 합니다. 태그가 생성되면 GitHub Actions가 테스트, Windows 빌드, SHA-256 생성, Release 게시를 자동으로 수행합니다.
 
 ### 비정상 종료 복구
 
@@ -32,7 +32,19 @@ PowerPoint 스타일의 셸 인터페이스를 기반으로 하는 오프라인 
 - **다양한 편집 도구**: 텍스트, 표(Table), 이미지, SVG 차트 데이터 편집 및 PPT 스타일 효과 적용을 지원합니다.
 
 ---
-## 🛠️ 최근 개선 내용 (Recent Improvements - 2026-09-10)
+## 🛠️ 최근 개선 내용 (Recent Improvements - 2026-09-11)
+
+### 0.3.0 PowerPoint형 개체 편집
+
+- 개체를 클릭해 선택하고 본체를 드래그해 자유롭게 이동할 수 있습니다. 빈 캔버스를 드래그하면 여러 개체를 영역 선택하며, `Ctrl`/`Cmd`/`Shift` 클릭으로 선택을 추가하거나 해제할 수 있습니다.
+- 단일 개체에는 8방향 크기 조절 핸들이 표시됩니다. 표는 내용 높이를 보존하기 위해 좌우 너비만 조절합니다.
+- Arrange 리본 탭에서 좌/가운데/우, 위/중앙/아래 정렬과 가로·세로 균등 배분, 위치 초기화를 제공합니다. 단일 개체 정렬의 기준은 현재 Section입니다.
+- 개체 및 Section의 가장자리·중심에 맞춰지는 스마트 가이드를 표시합니다. 이동 중 `Alt`를 누르면 스냅을 잠시 끄고, `Shift`를 누르면 가로 또는 세로축으로 이동을 제한합니다.
+- 방향키는 1px, `Shift`+방향키는 10px씩 이동합니다. `Tab`/`Shift`+`Tab`으로 개체를 순회하고 `Enter` 또는 `F2`로 텍스트 편집을 시작합니다.
+- Properties의 Size & Position에서 X/Y/W/H를 숫자로 정확히 입력할 수 있으며, 이미지 비율 잠금과 위치 초기화를 지원합니다.
+- 한 번의 드래그, 크기 조절, 방향키 연속 이동 또는 Arrange 명령은 각각 한 번의 Undo로 되돌릴 수 있습니다.
+- 표 셀과 중첩 인라인 텍스트는 독립 배치 개체로 중복 노출하지 않고 가장 가까운 표·텍스트 블록으로 묶습니다. 숨겨진 개체는 자동 선택과 스냅 대상에서 제외합니다.
+- 작성자가 적용한 `translate`, 반응형 자동 크기, grid/flex DOM 순서를 보존합니다. 고정 위치나 복합 회전·배율 개체는 안전하지 않은 조절을 잠그고 이유를 안내합니다.
 
 ### 0.2.1 보고서 호환성
 
@@ -93,15 +105,15 @@ npm run package
 빌드가 완료되면 `release/` 폴더에 설치판과 포터블판이 함께 생성됩니다.
 
 ```text
-HTMLpoint-Setup-0.2.1-x64.exe
-HTMLpoint-Portable-0.2.1-x64.exe
+HTMLpoint-Setup-0.3.0-x64.exe
+HTMLpoint-Portable-0.3.0-x64.exe
 ```
 
 ### GitHub Release 게시
 
 ```bash
-git tag v0.2.1
-git push origin v0.2.1
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 `.github/workflows/release.yml`이 Windows에서 잠금 파일 기반 `npm ci`, 단위 테스트, 패키징과 체크섬 생성을 수행한 뒤 GitHub Release에 배포판을 첨부합니다. 수동 실행 시에는 GitHub Actions의 artifact로만 생성되며 Release는 만들지 않습니다.

@@ -5,6 +5,7 @@ import {
   EditOperation,
   ImageFilterSettings,
   ImageResizeSettings,
+  ObjectLayoutPatch,
   ReportDocument,
   ReportSection,
   TableSortDirection,
@@ -17,6 +18,11 @@ import {
 import { applyChartData } from './chartAdapters';
 import { getElementByPath, getElementPath, makeNodeId } from './domPaths';
 import { parseHtml, parseSectionHtml } from './htmlParser';
+import {
+  findImageFrame,
+  shouldFillImageFrame,
+  TABLE_LAYOUT_TARGET_SELECTOR
+} from './layoutTargets';
 import {
   RUNTIME_TABLE_HOST_ATTRIBUTE,
   RUNTIME_TABLE_SNAPSHOT_ATTRIBUTE,
@@ -50,6 +56,20 @@ const EFFECT_OWNED_STYLE_PROPERTIES = [
   'font-weight',
   'line-height'
 ] as const;
+const LAYOUT_X_ATTRIBUTE = 'data-htmlpoint-layout-x';
+const LAYOUT_Y_ATTRIBUTE = 'data-htmlpoint-layout-y';
+const LAYOUT_BASE_X_ATTRIBUTE = 'data-htmlpoint-layout-base-x';
+const LAYOUT_BASE_Y_ATTRIBUTE = 'data-htmlpoint-layout-base-y';
+const LAYOUT_WIDTH_ATTRIBUTE = 'data-htmlpoint-layout-width';
+const LAYOUT_HEIGHT_ATTRIBUTE = 'data-htmlpoint-layout-height';
+const LAYOUT_ORIGINAL_TRANSLATE_ATTRIBUTE = 'data-htmlpoint-layout-original-translate';
+const LAYOUT_ORIGINAL_TRANSLATE_PRESENT_ATTRIBUTE =
+  'data-htmlpoint-layout-original-translate-present';
+const LAYOUT_ORIGINAL_TRANSLATE_PRIORITY_ATTRIBUTE =
+  'data-htmlpoint-layout-original-translate-priority';
+const MAX_LAYOUT_OFFSET = 50_000;
+const MIN_LAYOUT_SIZE = 16;
+const MAX_LAYOUT_SIZE = 20_000;
 
 export function editTextNode(
   report: ReportDocument,
@@ -689,10 +709,12 @@ export function resizeImage(
     if (settings.width && settings.width > 0) {
       element.setAttribute('width', String(Math.round(settings.width)));
       element.style.width = `${Math.round(settings.width)}${settings.unit}`;
+      syncPersistedLayoutDimension(element, LAYOUT_WIDTH_ATTRIBUTE, settings.width, settings.unit);
     }
     if (settings.height && settings.height > 0) {
       element.setAttribute('height', String(Math.round(settings.height)));
       element.style.height = `${Math.round(settings.height)}${settings.unit}`;
+      syncPersistedLayoutDimension(element, LAYOUT_HEIGHT_ATTRIBUTE, settings.height, settings.unit);
     }
     element.style.maxWidth = settings.unit === '%' ? '100%' : element.style.maxWidth;
     element.style.objectFit = element.style.objectFit || 'contain';
@@ -706,27 +728,26 @@ export function resizeImageFrame(
   settings: ImageResizeSettings
 ): ReportDocument {
   return mutateNode(report, sectionId, nodeId, (_root, element) => {
-    if (!(element instanceof HTMLElement)) {
-      return;
+    if (!(element instanceof HTMLImageElement)) {
+      return false;
     }
-    const frame = getImageFrameElement(element);
+    const frame = findImageFrame(element, _root);
     if (!frame) {
-      return;
+      return false;
     }
     if (settings.width && settings.width > 0) {
       frame.style.width = `${Math.round(settings.width)}${settings.unit}`;
+      syncPersistedLayoutDimension(frame, LAYOUT_WIDTH_ATTRIBUTE, settings.width, settings.unit);
     }
     if (settings.height && settings.height > 0) {
       frame.style.height = `${Math.round(settings.height)}${settings.unit}`;
+      syncPersistedLayoutDimension(frame, LAYOUT_HEIGHT_ATTRIBUTE, settings.height, settings.unit);
     }
-    const image = element instanceof HTMLImageElement ? element : frame.querySelector('img');
-    const fillFrame = image instanceof HTMLImageElement && shouldFillImageFrame(frame, image);
-
+    const image = element;
+    const fillFrame = shouldFillImageFrame(frame, image);
     frame.style.boxSizing = 'border-box';
     frame.style.overflow = frame.style.overflow || 'hidden';
     frame.style.maxWidth = settings.unit === '%' ? '100%' : frame.style.maxWidth;
-    frame.dataset.htmlpointFrame = 'image';
-
     if (image instanceof HTMLImageElement && fillFrame) {
       image.style.width = '100%';
       image.style.height = '100%';
@@ -736,6 +757,317 @@ export function resizeImageFrame(
   }, '이미지 프레임 크기 수정');
 }
 
+/**
+ * Applies one completed pointer/keyboard layout gesture as a single report edit.
+ * The source DOM structure is deliberately left untouched so path-based node IDs,
+ * authored grid/flex layout and report scripts keep working.
+ */
+export function applyObjectLayouts(
+  report: ReportDocument,
+  sectionId: string,
+  patches: ObjectLayoutPatch[],
+  label = '개체 배치 변경'
+): ReportDocument {
+  const section = findSection(report, sectionId);
+  if (!section || !patches.length || patches.length > 256) {
+    return report;
+  }
+  const document = parseHtml(section.html);
+  const sectionRoot = document.body.firstElementChild as HTMLElement | null;
+  if (!sectionRoot) {
+    return report;
+  }
+
+  const nodeById = new Map(section.editableNodes.map((node) => [node.id, node] as const));
+  const patchByTarget = new Map<
+    Element,
+    { patch: ObjectLayoutPatch; node: (typeof section.editableNodes)[number]; source: Element }
+  >();
+  for (const patch of patches) {
+    const node = nodeById.get(patch.nodeId);
+    if (!node || !isSafeLayoutPatch(patch)) {
+      return report;
+    }
+    const source = getElementByPath(sectionRoot, node.path);
+    const target = getElementByPath(
+      sectionRoot,
+      node.layoutTargetPath?.length ? node.layoutTargetPath : node.path
+    );
+    if (
+      !source ||
+      (!(target instanceof HTMLElement) && !(target instanceof SVGElement))
+    ) {
+      return report;
+    }
+    const existing = patchByTarget.get(target);
+    patchByTarget.set(target, existing
+      ? {
+          ...existing,
+          patch: { ...existing.patch, ...patch, nodeId: existing.patch.nodeId }
+        }
+      : { patch, node, source });
+  }
+  if (!patchByTarget.size) {
+    return report;
+  }
+
+  const before = section.html;
+  patchByTarget.forEach(({ patch, node, source }, target) => {
+    applyObjectLayoutPatch(
+      target as HTMLElement | SVGElement,
+      patch,
+      node.kind === 'image' && source instanceof HTMLImageElement ? source : undefined
+    );
+  });
+  if (sectionRoot.outerHTML === before) {
+    return report;
+  }
+
+  const nextSection = parseSectionHtml(
+    {
+      ...section,
+      html: sectionRoot.outerHTML,
+      changed: true
+    },
+    report.translations
+  );
+  return markReportChanged(
+    {
+      ...report,
+      sections: report.sections.map((candidate) =>
+        candidate.id === sectionId ? nextSection : candidate
+      )
+    },
+    {
+      type: 'layout',
+      label,
+      sectionId,
+      nodeId: patches[0]?.nodeId,
+      before,
+      after: nextSection.html
+    }
+  );
+}
+
+function isSafeLayoutPatch(patch: ObjectLayoutPatch): boolean {
+  if (!patch || typeof patch.nodeId !== 'string' || patch.nodeId.length > 512) {
+    return false;
+  }
+  const boundedOffset = (value: number | undefined) =>
+    value === undefined || (Number.isFinite(value) && Math.abs(value) <= MAX_LAYOUT_OFFSET);
+  const boundedSize = (value: number | undefined) =>
+    value === undefined ||
+    (Number.isFinite(value) && value >= MIN_LAYOUT_SIZE && value <= MAX_LAYOUT_SIZE);
+  return (
+    boundedOffset(patch.offsetX) &&
+    boundedOffset(patch.offsetY) &&
+    boundedOffset(patch.baseTranslateX) &&
+    boundedOffset(patch.baseTranslateY) &&
+    boundedSize(patch.width) &&
+    boundedSize(patch.height)
+  );
+}
+
+function applyObjectLayoutPatch(
+  target: HTMLElement | SVGElement,
+  patch: ObjectLayoutPatch,
+  sourceImage?: HTMLImageElement
+): void {
+  if (patch.resetPosition) {
+    restoreOriginalTranslate(target);
+  } else if (patch.offsetX !== undefined || patch.offsetY !== undefined) {
+    initializeLayoutTranslation(target, patch);
+    if (patch.offsetX !== undefined) {
+      target.setAttribute(LAYOUT_X_ATTRIBUTE, formatLayoutNumber(patch.offsetX));
+    }
+    if (patch.offsetY !== undefined) {
+      target.setAttribute(LAYOUT_Y_ATTRIBUTE, formatLayoutNumber(patch.offsetY));
+    }
+    reapplyPersistedLayoutStyle(target);
+  }
+
+  const appliesWidth = patch.width !== undefined;
+  const appliesHeight = patch.height !== undefined && !isContentHeightLayoutTarget(target);
+  if (patch.width !== undefined) {
+    target.setAttribute(LAYOUT_WIDTH_ATTRIBUTE, formatLayoutNumber(patch.width));
+  }
+  if (patch.height !== undefined && appliesHeight) {
+    target.setAttribute(LAYOUT_HEIGHT_ATTRIBUTE, formatLayoutNumber(patch.height));
+  }
+  if (appliesWidth || appliesHeight) {
+    if (isInlineLayoutTarget(target)) {
+      target.style.setProperty('display', 'inline-block', 'important');
+    }
+    target.style.setProperty('max-width', 'none', 'important');
+    target.style.setProperty('max-height', 'none', 'important');
+    reapplyPersistedLayoutStyle(target);
+    synchronizeIntrinsicSize(target, {
+      ...patch,
+      ...(appliesHeight ? {} : { height: undefined })
+    });
+    if (
+      sourceImage &&
+      sourceImage !== target &&
+      target instanceof HTMLElement &&
+      shouldFillImageFrame(target, sourceImage)
+    ) {
+      sourceImage.style.setProperty('width', '100%', 'important');
+      if (appliesHeight) {
+        sourceImage.style.setProperty('height', '100%', 'important');
+      }
+      sourceImage.style.setProperty('max-width', 'none', 'important');
+      sourceImage.style.objectFit = sourceImage.style.objectFit || 'contain';
+    }
+  }
+}
+
+function initializeLayoutTranslation(
+  target: HTMLElement | SVGElement,
+  patch: ObjectLayoutPatch
+): void {
+  if (!target.hasAttribute(LAYOUT_ORIGINAL_TRANSLATE_PRESENT_ATTRIBUTE)) {
+    const originalTranslate = target.style.getPropertyValue('translate');
+    target.setAttribute(
+      LAYOUT_ORIGINAL_TRANSLATE_PRESENT_ATTRIBUTE,
+      originalTranslate ? 'true' : 'false'
+    );
+    if (originalTranslate) {
+      target.setAttribute(LAYOUT_ORIGINAL_TRANSLATE_ATTRIBUTE, originalTranslate);
+      const priority = target.style.getPropertyPriority('translate');
+      if (priority) {
+        target.setAttribute(LAYOUT_ORIGINAL_TRANSLATE_PRIORITY_ATTRIBUTE, priority);
+      }
+    }
+  }
+  if (!target.hasAttribute(LAYOUT_BASE_X_ATTRIBUTE)) {
+    target.setAttribute(
+      LAYOUT_BASE_X_ATTRIBUTE,
+      formatLayoutNumber(patch.baseTranslateX ?? 0)
+    );
+  }
+  if (!target.hasAttribute(LAYOUT_BASE_Y_ATTRIBUTE)) {
+    target.setAttribute(
+      LAYOUT_BASE_Y_ATTRIBUTE,
+      formatLayoutNumber(patch.baseTranslateY ?? 0)
+    );
+  }
+}
+
+function restoreOriginalTranslate(target: HTMLElement | SVGElement): void {
+  const hadOriginal = target.getAttribute(LAYOUT_ORIGINAL_TRANSLATE_PRESENT_ATTRIBUTE);
+  if (hadOriginal === 'true') {
+    target.style.setProperty(
+      'translate',
+      target.getAttribute(LAYOUT_ORIGINAL_TRANSLATE_ATTRIBUTE) ?? '',
+      target.getAttribute(LAYOUT_ORIGINAL_TRANSLATE_PRIORITY_ATTRIBUTE) ?? ''
+    );
+  } else if (hadOriginal === 'false') {
+    target.style.removeProperty('translate');
+  }
+  [
+    LAYOUT_X_ATTRIBUTE,
+    LAYOUT_Y_ATTRIBUTE,
+    LAYOUT_BASE_X_ATTRIBUTE,
+    LAYOUT_BASE_Y_ATTRIBUTE,
+    LAYOUT_ORIGINAL_TRANSLATE_ATTRIBUTE,
+    LAYOUT_ORIGINAL_TRANSLATE_PRESENT_ATTRIBUTE,
+    LAYOUT_ORIGINAL_TRANSLATE_PRIORITY_ATTRIBUTE
+  ].forEach((attribute) => target.removeAttribute(attribute));
+}
+
+function reapplyPersistedLayoutStyle(target: HTMLElement | SVGElement): void {
+  const offsetX = readLayoutNumber(target, LAYOUT_X_ATTRIBUTE);
+  const offsetY = readLayoutNumber(target, LAYOUT_Y_ATTRIBUTE);
+  if (offsetX !== undefined || offsetY !== undefined) {
+    if (isInlineLayoutTarget(target)) {
+      target.style.setProperty('display', 'inline-block', 'important');
+    }
+    const baseX = readLayoutNumber(target, LAYOUT_BASE_X_ATTRIBUTE) ?? 0;
+    const baseY = readLayoutNumber(target, LAYOUT_BASE_Y_ATTRIBUTE) ?? 0;
+    target.style.setProperty(
+      'translate',
+      `${formatLayoutNumber(baseX + (offsetX ?? 0))}px ${formatLayoutNumber(baseY + (offsetY ?? 0))}px`,
+      'important'
+    );
+  }
+  const width = readLayoutNumber(target, LAYOUT_WIDTH_ATTRIBUTE);
+  const height = readLayoutNumber(target, LAYOUT_HEIGHT_ATTRIBUTE);
+  if ((width !== undefined || height !== undefined) && isInlineLayoutTarget(target)) {
+    target.style.setProperty('display', 'inline-block', 'important');
+  }
+  if (width !== undefined || height !== undefined) {
+    target.style.setProperty('max-width', 'none', 'important');
+    target.style.setProperty('max-height', 'none', 'important');
+  }
+  if (width !== undefined) {
+    target.style.setProperty('width', `${formatLayoutNumber(width)}px`, 'important');
+  }
+  if (height !== undefined && !isContentHeightLayoutTarget(target)) {
+    target.style.setProperty('height', `${formatLayoutNumber(height)}px`, 'important');
+  }
+}
+
+function synchronizeIntrinsicSize(
+  target: HTMLElement | SVGElement,
+  patch: ObjectLayoutPatch
+): void {
+  if (target instanceof HTMLCanvasElement) {
+    return;
+  }
+  if (target instanceof HTMLImageElement || target instanceof SVGElement) {
+    if (patch.width !== undefined) {
+      target.setAttribute('width', String(Math.round(patch.width)));
+    }
+    if (patch.height !== undefined) {
+      target.setAttribute('height', String(Math.round(patch.height)));
+    }
+  }
+}
+
+function readLayoutNumber(
+  target: HTMLElement | SVGElement,
+  attribute: string
+): number | undefined {
+  if (!target.hasAttribute(attribute)) {
+    return undefined;
+  }
+  const value = Number(target.getAttribute(attribute));
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function formatLayoutNumber(value: number): string {
+  return String(Math.round(value * 1000) / 1000);
+}
+
+function syncPersistedLayoutDimension(
+  target: HTMLElement | SVGElement,
+  attribute: string,
+  value: number,
+  unit: ImageResizeSettings['unit']
+): void {
+  if (unit === 'px') {
+    target.setAttribute(attribute, formatLayoutNumber(value));
+  } else {
+    target.removeAttribute(attribute);
+  }
+}
+
+function isInlineLayoutTarget(target: HTMLElement | SVGElement): boolean {
+  return ['a', 'span', 'strong', 'em', 'code', 'picture'].includes(target.tagName.toLowerCase());
+}
+
+function isContentHeightLayoutTarget(target: HTMLElement | SVGElement): boolean {
+  if (target instanceof HTMLTableElement) {
+    return true;
+  }
+  return Boolean(
+    target instanceof HTMLElement &&
+      target.matches(
+        TABLE_LAYOUT_TARGET_SELECTOR
+      ) &&
+      target.querySelector(':scope > table')
+  );
+}
 export function addImageAnnotation(
   report: ReportDocument,
   sectionId: string,
@@ -832,9 +1164,62 @@ function wrapImageForAnnotations(image: HTMLImageElement): HTMLSpanElement {
   host.setAttribute('style', 'position:relative;display:inline-block;vertical-align:top;line-height:0;');
   image.replaceWith(host);
   host.appendChild(image);
+  migrateImageLayoutToAnnotationHost(image, host);
   return host;
 }
 
+function migrateImageLayoutToAnnotationHost(
+  image: HTMLImageElement,
+  host: HTMLSpanElement
+): void {
+  const hasLayoutTranslation = [
+    LAYOUT_X_ATTRIBUTE,
+    LAYOUT_Y_ATTRIBUTE,
+    LAYOUT_BASE_X_ATTRIBUTE,
+    LAYOUT_BASE_Y_ATTRIBUTE,
+    LAYOUT_ORIGINAL_TRANSLATE_PRESENT_ATTRIBUTE
+  ].some((attribute) => image.hasAttribute(attribute));
+  const hasLayoutWidth = image.hasAttribute(LAYOUT_WIDTH_ATTRIBUTE);
+  const hasLayoutHeight = image.hasAttribute(LAYOUT_HEIGHT_ATTRIBUTE);
+
+  [LAYOUT_WIDTH_ATTRIBUTE, LAYOUT_HEIGHT_ATTRIBUTE].forEach((attribute) => {
+    if (image.hasAttribute(attribute)) {
+      host.setAttribute(attribute, image.getAttribute(attribute) ?? '');
+      image.removeAttribute(attribute);
+    }
+  });
+  if (hasLayoutTranslation) {
+    const offsetX = readLayoutNumber(image, LAYOUT_X_ATTRIBUTE) ?? 0;
+    const offsetY = readLayoutNumber(image, LAYOUT_Y_ATTRIBUTE) ?? 0;
+    restoreOriginalTranslate(image);
+    host.setAttribute(LAYOUT_X_ATTRIBUTE, formatLayoutNumber(offsetX));
+    host.setAttribute(LAYOUT_Y_ATTRIBUTE, formatLayoutNumber(offsetY));
+    host.setAttribute(LAYOUT_BASE_X_ATTRIBUTE, '0');
+    host.setAttribute(LAYOUT_BASE_Y_ATTRIBUTE, '0');
+    host.setAttribute(LAYOUT_ORIGINAL_TRANSLATE_PRESENT_ATTRIBUTE, 'false');
+    host.style.setProperty(
+      'translate',
+      `${formatLayoutNumber(offsetX)}px ${formatLayoutNumber(offsetY)}px`,
+      'important'
+    );
+  }
+  if (hasLayoutWidth || hasLayoutHeight) {
+    host.style.boxSizing = 'border-box';
+    host.style.maxWidth = 'none';
+    host.style.maxHeight = 'none';
+    if (hasLayoutWidth) {
+      host.style.width = `${host.getAttribute(LAYOUT_WIDTH_ATTRIBUTE)}px`;
+      image.style.width = '100%';
+      image.style.maxWidth = 'none';
+    }
+    if (hasLayoutHeight) {
+      host.style.height = `${host.getAttribute(LAYOUT_HEIGHT_ATTRIBUTE)}px`;
+      image.style.height = '100%';
+      image.style.maxHeight = 'none';
+    }
+    image.style.objectFit = image.style.objectFit || 'contain';
+  }
+}
 function createImageArrowOverlay(document: Document, coordinates: ImageArrowCoordinates): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.dataset.htmlpointImageArrow = 'true';
@@ -960,6 +1345,7 @@ export function applyTextEffect(
       }
       element.removeAttribute(EFFECT_ORIGINAL_STYLE_ATTRIBUTE);
       element.removeAttribute(EFFECT_ORIGINAL_STYLE_PRESENT_ATTRIBUTE);
+      reapplyPersistedLayoutStyle(element);
       return;
     }
 
@@ -984,6 +1370,7 @@ export function applyTextEffect(
       `background-color: ${settings.fill}; color: ${settings.textColor}; ` +
       `font-weight: ${settings.bold ? '700' : '500'}; line-height: 1.35;`;
     element.setAttribute('style', baselineStyle ? `${baselineStyle}; ${effectStyle}` : effectStyle);
+    reapplyPersistedLayoutStyle(element);
   }, '텍스트 효과 수정');
 }
 
@@ -1042,10 +1429,12 @@ export function updateChartPresentation(
     if (settings.width && settings.width > 0) {
       chartElement.setAttribute('width', String(Math.round(settings.width)));
       (chartElement as HTMLElement).style.width = `${Math.round(settings.width)}px`;
+      chartElement.setAttribute(LAYOUT_WIDTH_ATTRIBUTE, formatLayoutNumber(settings.width));
     }
     if (settings.height && settings.height > 0) {
       chartElement.setAttribute('height', String(Math.round(settings.height)));
       (chartElement as HTMLElement).style.height = `${Math.round(settings.height)}px`;
+      chartElement.setAttribute(LAYOUT_HEIGHT_ATTRIBUTE, formatLayoutNumber(settings.height));
     }
 
     const htmlElement = chartElement as HTMLElement;
@@ -1636,31 +2025,6 @@ function applyTextStyleToElement(element: HTMLElement, settings: TextStyleSettin
     }
   }
 }
-
-function getImageFrameElement(element: HTMLElement): HTMLElement | null {
-  const parent = element.parentElement;
-  if (!parent || parent.tagName.toLowerCase() === 'section' || parent.tagName.toLowerCase() === 'header') {
-    return null;
-  }
-  if (parent.dataset.htmlpointImageAnnotationHost === 'true') {
-    return null;
-  }
-  if (parent.children.length > 3) {
-    return null;
-  }
-  return parent;
-}
-
-function shouldFillImageFrame(frame: HTMLElement, image: HTMLImageElement): boolean {
-  return (
-    frame.classList.contains('action-photo-frame') ||
-    frame.dataset.htmlpointFrame === 'image' ||
-    image.style.objectFit === 'cover' ||
-    image.style.width === '100%' ||
-    image.style.height === '100%'
-  );
-}
-
 function restoreOriginalEffectStyle(element: HTMLElement): void {
   if (!element.hasAttribute(EFFECT_ORIGINAL_STYLE_ATTRIBUTE)) {
     return;

@@ -25,6 +25,7 @@ import type { SampleFile } from '../lib/fileServices';
 import { tooltipProps } from '../lib/tooltips';
 import {
   EditableNodeKind,
+  ObjectLayoutCommand,
   ReportDocument,
   TextStyleSettings,
   TextStyleSnapshot
@@ -38,6 +39,7 @@ interface RibbonProps {
   sectionHidden: boolean;
   selectedKind?: EditableNodeKind;
   selectedTextStyle?: TextStyleSnapshot;
+  selectedObjectCount?: number;
   canUndo: boolean;
   canRedo: boolean;
   onTabChange: (tab: string) => void;
@@ -63,8 +65,9 @@ interface RibbonProps {
   onImageCrop: () => void;
   onReviewSummary: () => void;
   onLanguageChange: (language: string) => void;
+  onArrange?: (command: ObjectLayoutCommand) => void;
 }
-const tabs = ['Home', 'Insert', 'Table', 'Image', 'Review', 'Export'];
+const tabs = ['Home', 'Insert', 'Arrange', 'Table', 'Image', 'Review', 'Export'];
 const RIBBON_PANEL_ID = 'ribbon-panel';
 
 export interface RibbonGroupModel {
@@ -76,6 +79,8 @@ export function getRibbonGroupsForTab(tab: string): RibbonGroupModel[] {
       return [{ title: 'Insert Objects' }];
     case 'Table':
       return [{ title: 'Table Tools' }, { title: 'Cell' }];
+    case 'Arrange':
+      return [{ title: 'Align' }, { title: 'Distribute' }, { title: 'Position' }];
     case 'Image':
       return [{ title: 'Image Tools' }, { title: 'Adjust' }];
     case 'Review':
@@ -101,6 +106,7 @@ export function Ribbon({
   sectionHidden,
   selectedKind,
   selectedTextStyle,
+  selectedObjectCount = 0,
   canUndo,
   canRedo,
   onTabChange,
@@ -124,7 +130,8 @@ export function Ribbon({
   onImageReplace,
   onImageCrop,
   onReviewSummary,
-  onLanguageChange
+  onLanguageChange,
+  onArrange
 }: RibbonProps): JSX.Element {
   const isTable = selectedKind === 'table';
   const isImage = selectedKind === 'image';
@@ -247,11 +254,6 @@ export function Ribbon({
             <RibbonGroup title="Paragraph">
               <IconButton icon={<List />} label="List" disabled />
               <IconButton icon={<Pilcrow />} label="Paragraph" disabled />
-              <MoveButtons
-                canMoveUp={hasSelectedSection && selectedSectionIndex > 0}
-                canMoveDown={hasSelectedSection && selectedSectionIndex < sectionCount - 1}
-                onMove={onMove}
-              />
             </RibbonGroup>
             <SectionButtons
               hasSelectedSection={hasSelectedSection}
@@ -260,6 +262,9 @@ export function Ribbon({
               onDuplicate={onDuplicate}
               onHideToggle={onHideToggle}
               onDelete={onDelete}
+              canMoveUp={hasSelectedSection && selectedSectionIndex > 0}
+              canMoveDown={hasSelectedSection && selectedSectionIndex < sectionCount - 1}
+              onMove={onMove}
             />
             <LanguageGroup report={report} onLanguageChange={onLanguageChange} />
           </>
@@ -275,6 +280,65 @@ export function Ribbon({
               <span>Image</span>
             </button>
           </RibbonGroup>
+        )}
+        {activeTab === 'Arrange' && (
+          <>
+            <RibbonGroup title="Align">
+              {[
+                ['align-left', 'Left'],
+                ['align-center', 'Center'],
+                ['align-right', 'Right'],
+                ['align-top', 'Top'],
+                ['align-middle', 'Middle'],
+                ['align-bottom', 'Bottom']
+              ].map(([command, label]) => (
+                <button
+                  key={command}
+                  className="compact-tool arrange-tool"
+                  type="button"
+                  disabled={selectedObjectCount < 1}
+                  onClick={() => onArrange?.(command as ObjectLayoutCommand)}
+                  {...tooltipProps(`Align ${label}`)}
+                >
+                  {label}
+                </button>
+              ))}
+            </RibbonGroup>
+            <RibbonGroup title="Distribute">
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedObjectCount < 3}
+                onClick={() => onArrange?.('distribute-horizontal')}
+                {...tooltipProps('Distribute horizontally · select 3 or more objects')}
+              >
+                Horizontal
+              </button>
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedObjectCount < 3}
+                onClick={() => onArrange?.('distribute-vertical')}
+                {...tooltipProps('Distribute vertically · select 3 or more objects')}
+              >
+                Vertical
+              </button>
+            </RibbonGroup>
+            <RibbonGroup title="Position">
+              {selectedObjectCount === 1 && (
+                <span className="arrange-reference-note">Aligns to Section</span>
+              )}
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedObjectCount < 1}
+                onClick={() => onArrange?.('reset-position')}
+                {...tooltipProps('Reset moved object position')}
+              >
+                Reset Position
+              </button>
+            </RibbonGroup>
+          </>
         )}
         {activeTab === 'Table' && (
           <>
@@ -375,7 +439,10 @@ function SectionButtons({
   sectionHidden,
   onDuplicate,
   onHideToggle,
-  onDelete
+  onDelete,
+  canMoveUp,
+  canMoveDown,
+  onMove
 }: {
   hasSelectedSection: boolean;
   sectionCount: number;
@@ -383,9 +450,17 @@ function SectionButtons({
   onDuplicate: () => void;
   onHideToggle: () => void;
   onDelete: () => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (delta: -1 | 1) => void;
 }): JSX.Element {
   return (
     <RibbonGroup title="Sections">
+      <MoveButtons
+        canMoveUp={canMoveUp}
+        canMoveDown={canMoveDown}
+        onMove={onMove}
+      />
       <button className="compact-tool" type="button" onClick={onDuplicate} disabled={!hasSelectedSection} {...tooltipProps('Duplicate section')}>
         <Copy size={16} />
         Duplicate

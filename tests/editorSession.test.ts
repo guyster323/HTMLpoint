@@ -51,7 +51,19 @@ describe('editor session selection', () => {
       cell: { row: 0, cell: 0 }
     });
   });
+  it('defaults a table-only section to its Table object instead of its first cell', () => {
+    const report = parseReportHtml(
+      '<!doctype html><html><body><main><section><table><tbody><tr><td>A</td></tr></tbody></table></section></main></body></html>'
+    );
+    const section = report.sections[0];
+    const table = section.editableNodes.find((node) => node.kind === 'table')!;
 
+    expect(normalizeSelection(report, emptySelection())).toMatchObject({
+      sectionId: section.id,
+      nodeId: table.id,
+      nodeIds: [table.id]
+    });
+  });
   it('selects the section that moves into a deleted middle section index', () => {
     const report = parseReportHtml(html);
     const deletedSectionIndex = 1;

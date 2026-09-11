@@ -26,6 +26,7 @@ const CATEGORY_BY_OPERATION_TYPE: Record<EditOperation['type'], string> = {
   table: '표',
   image: '이미지',
   chart: '차트',
+  layout: '배치',
   section: '섹션',
   serialize: '저장'
 };

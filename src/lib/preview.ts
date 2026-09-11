@@ -10,6 +10,7 @@ export interface PreviewNodePayload {
   kind: EditableNode['kind'];
   label: string;
   path: number[];
+  layoutPath: number[];
 }
 export interface PreviewSectionPayload {
   id: string;
@@ -126,6 +127,16 @@ const PREVIEW_SELECTION_CSS = `
     z-index: 2147483646 !important;
     pointer-events: none !important;
     box-sizing: border-box !important;
+    border: 2px solid #0f6cbd !important;
+    outline: 1px solid rgba(255,255,255,.85) !important;
+  }
+  .htmlpoint-selection-overlay-multi {
+    border-style: dashed !important;
+    border-color: #6b9fe5 !important;
+  }
+  .htmlpoint-selection-group-overlay {
+    border: 2px dashed #0f6cbd !important;
+    background: rgba(15, 108, 189, .035) !important;
   }
   .htmlpoint-select-handle {
     position: absolute !important;
@@ -137,12 +148,63 @@ const PREVIEW_SELECTION_CSS = `
     background: #0f6cbd !important;
     box-shadow: 0 1px 2px rgba(0,0,0,.25) !important;
     pointer-events: auto !important;
+    transform: scale(var(--htmlpoint-handle-scale, 1)) !important;
+    transform-origin: center !important;
   }
-  .htmlpoint-select-handle-se[data-htmlpoint-resize-handle="true"] { cursor: nwse-resize !important; }
+  .htmlpoint-select-handle::after {
+    content: '' !important;
+    position: absolute !important;
+    inset: -8px !important;
+  }
+  .htmlpoint-select-handle-nw,
+  .htmlpoint-select-handle-se { cursor: nwse-resize !important; }
+  .htmlpoint-select-handle-ne,
+  .htmlpoint-select-handle-sw { cursor: nesw-resize !important; }
+  .htmlpoint-select-handle-n,
+  .htmlpoint-select-handle-s { cursor: ns-resize !important; }
+  .htmlpoint-select-handle-e,
+  .htmlpoint-select-handle-w { cursor: ew-resize !important; }
   .htmlpoint-select-handle-nw { left: -8px !important; top: -8px !important; }
   .htmlpoint-select-handle-ne { right: -8px !important; top: -8px !important; }
   .htmlpoint-select-handle-sw { left: -8px !important; bottom: -8px !important; }
   .htmlpoint-select-handle-se { right: -8px !important; bottom: -8px !important; }
+  .htmlpoint-select-handle-n { left: calc(50% - 5px) !important; top: -8px !important; }
+  .htmlpoint-select-handle-s { left: calc(50% - 5px) !important; bottom: -8px !important; }
+  .htmlpoint-select-handle-e { right: -8px !important; top: calc(50% - 5px) !important; }
+  .htmlpoint-select-handle-w { left: -8px !important; top: calc(50% - 5px) !important; }
+  .htmlpoint-layout-guide {
+    position: fixed !important;
+    z-index: 2147483647 !important;
+    pointer-events: none !important;
+    background: #d83b01 !important;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.7) !important;
+  }
+  .htmlpoint-layout-guide-x { width: 1px !important; }
+  .htmlpoint-layout-guide-y { height: 1px !important; }
+  .htmlpoint-layout-badge {
+    position: fixed !important;
+    z-index: 2147483647 !important;
+    pointer-events: none !important;
+    padding: 3px 7px !important;
+    border-radius: 4px !important;
+    background: #242424 !important;
+    color: #fff !important;
+    font: 11px/1.25 Segoe UI, Arial, sans-serif !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,.25) !important;
+  }
+  .htmlpoint-layout-dragging,
+  .htmlpoint-layout-dragging * {
+    cursor: move !important;
+    user-select: none !important;
+  }
+  .htmlpoint-layout-resizing,
+  .htmlpoint-layout-resizing * {
+    user-select: none !important;
+  }
+  .htmlpoint-select-handle-disabled {
+    cursor: not-allowed !important;
+    background: #7a7a7a !important;
+  }
   .htmlpoint-marquee {
     position: fixed !important;
     z-index: 2147483645 !important;
@@ -177,7 +239,8 @@ export function buildPreviewSelectionPayload(
     id: node.id,
     kind: node.kind,
     label: node.label,
-    path: node.path
+    path: node.path,
+    layoutPath: node.layoutTargetPath ?? node.path
   }));
 }
 export function buildPreviewSectionPayloads(
@@ -220,6 +283,18 @@ export function buildPreviewHtml(
   let imageArrowModeNodeId = '';
   let imageMosaicModeNodeId = '';
   let marquee = null;
+  let activeLayoutGesture = null;
+  let keyboardLayoutGesture = null;
+  let suppressClickUntil = 0;
+  let lastLayoutCommandId = 0;
+  const MAX_LAYOUT_OBJECTS = 256;
+  const MAX_LAYOUT_OFFSET = 50000;
+  const MIN_LAYOUT_SIZE = 16;
+  const MAX_LAYOUT_SIZE = 20000;
+  const htmlpointNodeById = new Map(htmlpointNodes.map((node) => [node.id, node]));
+  const nodeElementCache = new Map();
+  const layoutElementCache = new Map();
+  const representativeNodeCache = new WeakMap();
   function postToEditor(payload) {
     window.parent.postMessage({
       source: 'htmlpoint-preview',
@@ -233,15 +308,28 @@ export function buildPreviewHtml(
   function getImageFrameElement(element) {
     const parent = element && element.parentElement;
     if (!parent || !parent.tagName || ['section', 'header'].includes(parent.tagName.toLowerCase())) return null;
-    if (parent.dataset && parent.dataset.htmlpointImageAnnotationHost === 'true') return null;
+    if (
+      parent.dataset &&
+      (parent.dataset.htmlpointImageAnnotationHost === 'true' || parent.dataset.htmlpointFrame === 'image')
+    ) return parent;
+    if (parent.matches('.action-photo-frame, .image-frame, .photo-frame, figure, picture')) return parent;
     if (parent.children && parent.children.length > 3) return null;
-    return parent;
+    const identity = (parent.id || '') + ' ' + (parent.className || '');
+    return /(?:^|[-_\\s])(image|photo|frame|card)(?:$|[-_\\s])/i.test(identity) ? parent : null;
   }
-  function visualTargetFor(node, element) {
-    if (node && node.kind === 'image') {
-      return getImageFrameElement(element) || element;
-    }
-    return element;
+  function shouldFillImageFrame(frame, image) {
+    return String(frame.tagName || '').toLowerCase() === 'picture' ||
+      (frame.dataset && frame.dataset.htmlpointImageAnnotationHost === 'true') ||
+      (frame.classList && frame.classList.contains('action-photo-frame')) ||
+      (frame.dataset && frame.dataset.htmlpointFrame === 'image') ||
+      image.style.objectFit === 'cover' ||
+      image.style.width === '100%' ||
+      image.style.height === '100%';
+  }
+  function visualTargetFor(node, element, sectionId = selectedSectionId) {
+    return (node && elementForLayoutNode(sectionId, node)) ||
+      (node && node.kind === 'image' ? getImageFrameElement(element) : null) ||
+      element;
   }
   function normalizeColor(value) {
     if (!value || value === 'transparent' || value === 'rgba(0, 0, 0, 0)') return undefined;
@@ -334,6 +422,14 @@ export function buildPreviewHtml(
         snapshot.frameMetrics = snapshotFrameMetrics(visualTarget);
       }
     }
+    if (visualTarget instanceof HTMLElement || visualTarget instanceof SVGElement) {
+      snapshot.layoutMetrics = layoutMetrics({
+        nodeId: node.id,
+        node,
+        element: target,
+        target: visualTarget
+      });
+    }
     return snapshot;
   }
   function postSelectionMessage(type, nodeId, extra) {
@@ -356,7 +452,7 @@ export function buildPreviewHtml(
 
     event.preventDefault();
     event.stopPropagation();
-    selectNode(node.id, true, event.ctrlKey || event.metaKey);
+    selectNode(node.id, true, event.ctrlKey || event.metaKey || event.shiftKey);
     const originalText = element.textContent || '';
     element.dataset.htmlpointInlineEditing = 'true';
     element.classList.add('htmlpoint-inline-editing');
@@ -413,74 +509,40 @@ export function buildPreviewHtml(
       element.classList.remove('htmlpoint-selected-node');
       element.classList.remove('htmlpoint-selected-node-multi');
       element.classList.remove('htmlpoint-selected-node-child');
-      element.querySelectorAll(':scope > .htmlpoint-select-handle').forEach((handle) => handle.remove());
     });
     document.querySelectorAll('.htmlpoint-selection-overlay').forEach((overlay) => overlay.remove());
   }
-  function addHandles(element, node) {
-    if (!(element instanceof HTMLElement) && !(element instanceof SVGElement)) return;
-    const resizeTarget = visualTargetFor(node, element);
-    const overlay = document.createElement('div');
-    overlay.className = 'htmlpoint-selection-overlay';
-    const rect = resizeTarget.getBoundingClientRect();
+  function setOverlayRect(overlay, rect) {
     overlay.style.left = rect.left + 'px';
     overlay.style.top = rect.top + 'px';
     overlay.style.width = rect.width + 'px';
     overlay.style.height = rect.height + 'px';
+  }
+  function createSelectionOverlay(rect, className) {
+    const overlay = document.createElement('div');
+    overlay.className = 'htmlpoint-selection-overlay ' + (className || '');
+    setOverlayRect(overlay, rect);
     overlay.setAttribute('aria-hidden', 'true');
     document.documentElement.appendChild(overlay);
-    ['nw','ne','sw','se'].forEach((corner) => {
+    return overlay;
+  }
+  function addHandles(entry) {
+    const state = layoutState(entry);
+    const overlay = createSelectionOverlay(state.rect, '');
+    overlay.dataset.htmlpointLayoutNodeId = entry.nodeId;
+    const candidateHandles = state.lockHeight
+      ? ['e', 'w']
+      : ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+    const handles = state.lockPosition
+      ? candidateHandles.filter((direction) => !direction.includes('n') && !direction.includes('w'))
+      : candidateHandles;
+    handles.forEach((direction) => {
       const handle = document.createElement('span');
-      handle.className = 'htmlpoint-select-handle htmlpoint-select-handle-' + corner;
+      handle.className = 'htmlpoint-select-handle htmlpoint-select-handle-' + direction;
+      if (state.lockSize) handle.classList.add('htmlpoint-select-handle-disabled');
       handle.setAttribute('aria-hidden', 'true');
-      if (node.kind === 'image' && corner === 'se') {
-        let resizing = false;
-        const beginResize = (event) => {
-          if (resizing || !event.isTrusted) return;
-          resizing = true;
-          event.preventDefault();
-          event.stopPropagation();
-          const startX = event.clientX;
-          const startY = event.clientY;
-          const resizeTarget = visualTargetFor(node, element);
-          const start = resizeTarget.getBoundingClientRect();
-          const hasFrame = resizeTarget !== element;
-          const pointerId = event.pointerId;
-          try {
-            if (pointerId !== undefined) handle.setPointerCapture(pointerId);
-          } catch (_error) {
-            // Some sandboxed preview contexts do not allow pointer capture.
-          }
-          const finish = (finishEvent) => {
-            if (!resizing) return;
-            resizing = false;
-            const width = Math.max(24, Math.round(start.width + finishEvent.clientX - startX));
-            const height = Math.max(24, Math.round(start.height + finishEvent.clientY - startY));
-            postToEditor({
-              type: hasFrame ? 'htmlpoint-resize-image-frame' : 'htmlpoint-resize-image',
-              nodeId: node.id,
-              width,
-              height
-            });
-            try {
-              if (pointerId !== undefined) handle.releasePointerCapture(pointerId);
-            } catch (_error) {
-              // Ignore release failures after pointer capture fallback.
-            }
-            window.removeEventListener('pointerup', finish);
-            window.removeEventListener('mouseup', finish);
-            handle.removeEventListener('pointerup', finish);
-            handle.removeEventListener('mouseup', finish);
-          };
-          window.addEventListener('pointerup', finish, { once: true });
-          window.addEventListener('mouseup', finish, { once: true });
-          handle.addEventListener('pointerup', finish, { once: true });
-          handle.addEventListener('mouseup', finish, { once: true });
-        };
-        handle.dataset.htmlpointResizeHandle = 'true';
-        handle.addEventListener('pointerdown', beginResize);
-        handle.addEventListener('mousedown', beginResize);
-      }
+      handle.dataset.htmlpointResizeHandle = direction;
+      handle.addEventListener('pointerdown', (event) => beginResizeGesture(event, entry, direction));
       overlay.appendChild(handle);
     });
   }
@@ -492,20 +554,1066 @@ export function buildPreviewHtml(
     return sectionElement(selectedSectionId);
   }
 
+  function representativePriority(node, target, sectionId) {
+    if (node.kind === 'table') return 0;
+    if (node.kind === 'image') return 1;
+    if (node.kind === 'chart') return 2;
+    if (elementForNode(sectionId, node) === target) return 3;
+    if (node.kind === 'list') return 4;
+    return 5;
+  }
+
+  function primePreviewObjectCaches() {
+    document.querySelectorAll('[data-htmlpoint-node-id][data-htmlpoint-section-id]')
+      .forEach((element) => {
+        const sectionId = element.getAttribute('data-htmlpoint-section-id') || '';
+        const nodeId = element.getAttribute('data-htmlpoint-node-id') || '';
+        if (sectionId && nodeId) nodeElementCache.set(sectionId + ':' + nodeId, element);
+      });
+    document.querySelectorAll('[data-htmlpoint-preview-layout-key]')
+      .forEach((element) => {
+        const slide = element.closest('[data-htmlpoint-preview-section]');
+        const sectionId = slide?.getAttribute('data-htmlpoint-preview-section') || '';
+        const layoutKey = element.getAttribute('data-htmlpoint-preview-layout-key') || '';
+        if (sectionId) layoutElementCache.set(sectionId + ':' + layoutKey, element);
+      });
+    htmlpointSections.forEach((section) => {
+      section.nodes.forEach((node) => {
+        const target = elementForLayoutNode(section.id, node);
+        if (!(target instanceof Element)) return;
+        const current = representativeNodeCache.get(target);
+        if (
+          !current ||
+          representativePriority(node, target, section.id) <
+            representativePriority(current, target, section.id)
+        ) {
+          representativeNodeCache.set(target, node);
+        }
+      });
+    });
+  }
+
   function elementForNode(sectionId, node) {
     const slide = sectionElement(sectionId);
     if (!(slide instanceof HTMLElement)) return null;
+    const cacheKey = sectionId + ':' + node.id;
+    const cached = nodeElementCache.get(cacheKey);
+    if (cached instanceof Element && cached.isConnected) return cached;
     const marked = Array.from(
       slide.querySelectorAll('[data-htmlpoint-node-id][data-htmlpoint-section-id]')
     ).find((element) =>
       element.getAttribute('data-htmlpoint-node-id') === node.id &&
       element.getAttribute('data-htmlpoint-section-id') === sectionId
     );
-    return marked || elementByPath(slide, node.path);
+    const resolved = marked || elementByPath(slide, node.path);
+    if (resolved instanceof Element) nodeElementCache.set(cacheKey, resolved);
+    return resolved;
+  }
+
+  function elementForLayoutNode(sectionId, node) {
+    const slide = sectionElement(sectionId);
+    if (!(slide instanceof HTMLElement) || !node) return null;
+    const path = Array.isArray(node.layoutPath) ? node.layoutPath : node.path;
+    const layoutKey = path.join('.');
+    const cacheKey = sectionId + ':' + layoutKey;
+    const cached = layoutElementCache.get(cacheKey);
+    if (cached instanceof Element && cached.isConnected) return cached;
+    const marked = Array.from(slide.querySelectorAll('[data-htmlpoint-preview-layout-key]'))
+      .find((element) => element.getAttribute('data-htmlpoint-preview-layout-key') === layoutKey);
+    const resolved = marked || elementByPath(slide, path);
+    if (resolved instanceof Element) layoutElementCache.set(cacheKey, resolved);
+    return resolved;
+  }
+
+  function layoutEntries(nodeIds, suppressDescendants = true) {
+    const requested = Array.from(new Set(nodeIds)).filter(Boolean);
+    const ordered = selectedNodeId && requested.includes(selectedNodeId)
+      ? [selectedNodeId].concat(requested.filter((id) => id !== selectedNodeId))
+      : requested;
+    const byTarget = new Map();
+    ordered.forEach((nodeId) => {
+      const node = htmlpointNodeById.get(nodeId);
+      const element = node ? elementForNode(selectedSectionId, node) : null;
+      const target = node ? visualTargetFor(node, element) : null;
+      if (!node || !(target instanceof HTMLElement || target instanceof SVGElement)) return;
+      if (!byTarget.has(target)) {
+        byTarget.set(target, { nodeId, node, element, target });
+      }
+    });
+    const unique = Array.from(byTarget.values());
+    return suppressDescendants ? unique.filter((entry) =>
+      !unique.some((other) =>
+        other !== entry && other.target !== entry.target && other.target.contains(entry.target)
+      )
+    ) : unique;
+  }
+
+  function representativeNodeIdForTarget(target, sectionId = selectedSectionId) {
+    const cached = representativeNodeCache.get(target);
+    if (cached) return cached.id;
+    const sectionNodes = sectionId === selectedSectionId
+      ? htmlpointNodes
+      : htmlpointSections.find((section) => section.id === sectionId)?.nodes || [];
+    const mapped = sectionNodes.filter(
+      (node) => elementForLayoutNode(sectionId, node) === target
+    );
+    const representative =
+      mapped.find((node) => node.kind === 'table') ||
+      mapped.find((node) => node.kind === 'image') ||
+      mapped.find((node) => node.kind === 'chart') ||
+      mapped.find((node) => elementForNode(sectionId, node) === target) ||
+      mapped[0];
+    if (representative) representativeNodeCache.set(target, representative);
+    return representative ? representative.id : '';
+  }
+
+  function layoutSelectionNodeId(node, sectionId = selectedSectionId) {
+    const element = elementForNode(sectionId, node);
+    const target = visualTargetFor(node, element, sectionId);
+    return target instanceof Element
+      ? representativeNodeIdForTarget(target, sectionId) || node.id
+      : node.id;
+  }
+
+  function readDataNumber(target, name) {
+    if (!target.hasAttribute(name)) return undefined;
+    const value = Number(target.getAttribute(name));
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  function parseTranslate(value) {
+    if (!value || value === 'none') return { x: 0, y: 0, supported: true };
+    const parts = String(value).trim().split(/\\s+/);
+    if (parts.length > 2 || parts.some((part) => !/^-?(?:\\d+|\\d*\\.\\d+)px$/.test(part) && part !== '0')) {
+      return { x: 0, y: 0, supported: false };
+    }
+    const x = Number.parseFloat(parts[0]);
+    const y = Number.parseFloat(parts[1] || '0');
+    return {
+      x: Number.isFinite(x) ? x : 0,
+      y: Number.isFinite(y) ? y : 0,
+      supported: Number.isFinite(x) && Number.isFinite(y)
+    };
+  }
+
+  function isContentHeightTarget(target) {
+    return target instanceof HTMLTableElement || Boolean(
+      target instanceof HTMLElement &&
+      target.matches('[data-htmlpoint-runtime-table-snapshot], [data-htmlpoint-table-frame], .table-scroll, .table-wrap, .table-wrapper, .table-responsive') &&
+      target.querySelector(':scope > table')
+    );
+  }
+
+  function isRenderedLayoutTarget(target) {
+    if (!(target instanceof Element) || !target.isConnected || !target.getClientRects().length) {
+      return false;
+    }
+    const rect = target.getBoundingClientRect();
+    return rect.width > 0.5 && rect.height > 0.5;
+  }
+
+  function cssPixelSize(target, computed, dimension, fallback) {
+    const computedValue = Number.parseFloat(computed[dimension]);
+    if (Number.isFinite(computedValue) && computedValue > 0) return computedValue;
+    const borderBoxSize = target instanceof HTMLElement
+      ? (dimension === 'width' ? target.offsetWidth : target.offsetHeight)
+      : fallback;
+    if (!Number.isFinite(borderBoxSize) || borderBoxSize <= 0 || computed.boxSizing === 'border-box') {
+      return fallback;
+    }
+    const sides = dimension === 'width'
+      ? ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
+      : ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth'];
+    const extras = sides.reduce((sum, property) => {
+      const value = Number.parseFloat(computed[property]);
+      return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
+    return Math.max(1, borderBoxSize - extras);
+  }
+
+  function hasUnsupportedSizeTransform(target) {
+    let current = target;
+    while (current instanceof Element) {
+      const computed = window.getComputedStyle(current);
+      const transform = computed.transform;
+      const rotate = computed.rotate;
+      const scale = computed.scale;
+      if (transform && transform !== 'none') return true;
+      if (rotate && !['none', '0', '0deg'].includes(rotate)) return true;
+      if (scale && !['none', '1', '1 1'].includes(scale)) return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
+  function openAncestorDetails(target) {
+    let details = target instanceof Element ? target.closest('details') : null;
+    while (details instanceof HTMLDetailsElement) {
+      details.open = true;
+      details = details.parentElement?.closest('details') || null;
+    }
+  }
+
+  function layoutState(entry) {
+    const target = entry.target;
+    const computed = window.getComputedStyle(target);
+    const rect = target.getBoundingClientRect();
+    const offsetX = readDataNumber(target, 'data-htmlpoint-layout-x') || 0;
+    const offsetY = readDataNumber(target, 'data-htmlpoint-layout-y') || 0;
+    const computedTranslate = parseTranslate(computed.translate);
+    const baseTranslateX = readDataNumber(target, 'data-htmlpoint-layout-base-x');
+    const baseTranslateY = readDataNumber(target, 'data-htmlpoint-layout-base-y');
+    const position = computed.position;
+    const cssWidth = cssPixelSize(target, computed, 'width', rect.width);
+    const cssHeight = cssPixelSize(target, computed, 'height', rect.height);
+    const lockHeight = isContentHeightTarget(target);
+    return {
+      ...entry,
+      rect,
+      originalStyle: target.getAttribute('style'),
+      offsetX,
+      offsetY,
+      baseTranslateX: baseTranslateX === undefined ? computedTranslate.x - offsetX : baseTranslateX,
+      baseTranslateY: baseTranslateY === undefined ? computedTranslate.y - offsetY : baseTranslateY,
+      cssWidth,
+      cssHeight,
+      lockHeight,
+      lockSize:
+        hasUnsupportedSizeTransform(target) ||
+        !computedTranslate.supported ||
+        cssWidth < MIN_LAYOUT_SIZE ||
+        cssWidth > MAX_LAYOUT_SIZE ||
+        (!lockHeight && cssHeight > MAX_LAYOUT_SIZE),
+      lockPosition:
+        position === 'fixed' ||
+        position === 'sticky' ||
+        !computedTranslate.supported
+    };
+  }
+
+  function layoutMetrics(entry) {
+    const state = layoutState(entry);
+    const slide = selectedSlideElement();
+    const slideRect = slide instanceof HTMLElement ? slide.getBoundingClientRect() : { left: 0, top: 0 };
+    return {
+      x: Math.round((state.rect.left - slideRect.left) * 1000) / 1000,
+      y: Math.round((state.rect.top - slideRect.top) * 1000) / 1000,
+      width: Math.round(state.cssWidth * 1000) / 1000,
+      height: Math.round(state.cssHeight * 1000) / 1000,
+      offsetX: state.offsetX,
+      offsetY: state.offsetY,
+      baseTranslateX: state.baseTranslateX,
+      baseTranslateY: state.baseTranslateY,
+      lockHeight: state.lockHeight,
+      lockSize: state.lockSize,
+      lockPosition: state.lockPosition
+    };
+  }
+
+  function roundLayout(value) {
+    return Math.round(value * 1000) / 1000;
+  }
+
+  function layoutPatchFor(state, offsetX, offsetY, width, height) {
+    const patch = {
+      nodeId: state.nodeId,
+      offsetX: roundLayout(offsetX),
+      offsetY: roundLayout(offsetY),
+      baseTranslateX: roundLayout(state.baseTranslateX),
+      baseTranslateY: roundLayout(state.baseTranslateY)
+    };
+    if (Number.isFinite(width)) patch.width = roundLayout(width);
+    if (Number.isFinite(height) && !state.lockHeight) patch.height = roundLayout(height);
+    return patch;
+  }
+
+  function resizePatchFor(state, latest, direction) {
+    const patch = { nodeId: state.nodeId };
+    if (direction.includes('e') || direction.includes('w')) {
+      patch.width = roundLayout(latest.width);
+    }
+    if (!state.lockHeight && (direction.includes('n') || direction.includes('s'))) {
+      patch.height = roundLayout(latest.height);
+    }
+    if (direction.includes('w')) {
+      patch.offsetX = roundLayout(latest.offsetX);
+    }
+    if (!state.lockHeight && direction.includes('n')) {
+      patch.offsetY = roundLayout(latest.offsetY);
+    }
+    if (direction.includes('w') || (!state.lockHeight && direction.includes('n'))) {
+      patch.baseTranslateX = roundLayout(state.baseTranslateX);
+      patch.baseTranslateY = roundLayout(state.baseTranslateY);
+    }
+    return patch;
+  }
+
+  function applyLivePosition(state, offsetX, offsetY) {
+    if (['a', 'span', 'strong', 'em', 'code', 'picture'].includes(state.target.tagName.toLowerCase())) {
+      state.target.style.setProperty('display', 'inline-block', 'important');
+    }
+    state.target.style.setProperty(
+      'translate',
+      roundLayout(state.baseTranslateX + offsetX) + 'px ' +
+        roundLayout(state.baseTranslateY + offsetY) + 'px',
+      'important'
+    );
+  }
+
+  function applyLiveSize(state, width, height) {
+    if (Number.isFinite(width)) {
+      state.target.style.setProperty('width', roundLayout(width) + 'px', 'important');
+      state.target.style.setProperty('max-width', 'none', 'important');
+    }
+    if (Number.isFinite(height) && !state.lockHeight) {
+      state.target.style.setProperty('height', roundLayout(height) + 'px', 'important');
+      state.target.style.setProperty('max-height', 'none', 'important');
+    }
+    if (['a', 'span', 'strong', 'em', 'code', 'picture'].includes(state.target.tagName.toLowerCase())) {
+      state.target.style.setProperty('display', 'inline-block', 'important');
+    }
+    if (
+      state.node.kind === 'image' &&
+      state.element instanceof HTMLImageElement &&
+      state.target !== state.element &&
+      state.target instanceof HTMLElement &&
+      shouldFillImageFrame(state.target, state.element)
+    ) {
+      state.element.style.setProperty('width', '100%', 'important');
+      if (!state.lockHeight && Number.isFinite(height)) {
+        state.element.style.setProperty('height', '100%', 'important');
+      }
+      state.element.style.setProperty('max-width', 'none', 'important');
+      state.element.style.objectFit = state.element.style.objectFit || 'contain';
+    }
+  }
+
+  function restoreTransientStates(states) {
+    states.forEach((state) => {
+      if (state.originalStyle === null) state.target.removeAttribute('style');
+      else state.target.setAttribute('style', state.originalStyle);
+      if (state.element !== state.target && state.originalElementStyle !== undefined) {
+        if (state.originalElementStyle === null) state.element.removeAttribute('style');
+        else state.element.setAttribute('style', state.originalElementStyle);
+      }
+    });
+  }
+
+  function clearLayoutFeedback() {
+    document.documentElement.classList.remove('htmlpoint-layout-dragging');
+    document.documentElement.classList.remove('htmlpoint-layout-resizing');
+    document.querySelectorAll('.htmlpoint-layout-guide, .htmlpoint-layout-badge').forEach((element) => element.remove());
+  }
+
+  function showLayoutBadge(text, rect) {
+    document.querySelectorAll('.htmlpoint-layout-badge').forEach((element) => element.remove());
+    const badge = document.createElement('div');
+    badge.className = 'htmlpoint-layout-badge';
+    badge.textContent = text;
+    badge.style.left = Math.max(4, rect.right - 90) + 'px';
+    badge.style.top = Math.max(4, rect.top - 30) + 'px';
+    document.documentElement.appendChild(badge);
+  }
+
+  function showSnapGuides(x, y) {
+    document.querySelectorAll('.htmlpoint-layout-guide').forEach((element) => element.remove());
+    const slide = selectedSlideElement();
+    if (!(slide instanceof HTMLElement)) return;
+    const rect = slide.getBoundingClientRect();
+    if (Number.isFinite(x)) {
+      const guide = document.createElement('div');
+      guide.className = 'htmlpoint-layout-guide htmlpoint-layout-guide-x';
+      guide.style.left = x + 'px';
+      guide.style.top = rect.top + 'px';
+      guide.style.height = rect.height + 'px';
+      document.documentElement.appendChild(guide);
+    }
+    if (Number.isFinite(y)) {
+      const guide = document.createElement('div');
+      guide.className = 'htmlpoint-layout-guide htmlpoint-layout-guide-y';
+      guide.style.left = rect.left + 'px';
+      guide.style.top = y + 'px';
+      guide.style.width = rect.width + 'px';
+      document.documentElement.appendChild(guide);
+    }
+  }
+
+  function startBoundsFor(states) {
+    const left = Math.min(...states.map((state) => state.rect.left));
+    const top = Math.min(...states.map((state) => state.rect.top));
+    const right = Math.max(...states.map((state) => state.rect.right));
+    const bottom = Math.max(...states.map((state) => state.rect.bottom));
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
+
+  function nearestSnap(anchors, candidates, threshold) {
+    let best;
+    anchors.forEach((anchor) => {
+      candidates.forEach((candidate) => {
+        const difference = candidate - anchor;
+        if (Math.abs(difference) <= threshold && (!best || Math.abs(difference) < Math.abs(best.difference))) {
+          best = { difference, line: candidate };
+        }
+      });
+    });
+    return best;
+  }
+
+  function collectSnapCandidateRects(states) {
+    const selectedTargets = new Set(states.map((state) => state.target));
+    const rects = layoutEntries(htmlpointNodes.map((node) => node.id), false)
+      .filter((entry) =>
+        isRenderedLayoutTarget(entry.target) &&
+        !Array.from(selectedTargets).some(
+          (target) => target === entry.target || target.contains(entry.target)
+        )
+      )
+      .map((entry) => entry.target.getBoundingClientRect());
+    const slide = selectedSlideElement();
+    if (slide instanceof HTMLElement) rects.push(slide.getBoundingClientRect());
+    return rects;
+  }
+
+  function snapMove(states, candidateRects, deltaX, deltaY, disabled) {
+    if (disabled) return { deltaX, deltaY };
+    const bounds = startBoundsFor(states);
+    const xCandidates = candidateRects.flatMap((rect) => [rect.left, rect.left + rect.width / 2, rect.right]);
+    const yCandidates = candidateRects.flatMap((rect) => [rect.top, rect.top + rect.height / 2, rect.bottom]);
+    const xSnap = nearestSnap(
+      [bounds.left + deltaX, bounds.left + bounds.width / 2 + deltaX, bounds.right + deltaX],
+      xCandidates,
+      5
+    );
+    const ySnap = nearestSnap(
+      [bounds.top + deltaY, bounds.top + bounds.height / 2 + deltaY, bounds.bottom + deltaY],
+      yCandidates,
+      5
+    );
+    return {
+      deltaX: deltaX + (xSnap ? xSnap.difference : 0),
+      deltaY: deltaY + (ySnap ? ySnap.difference : 0),
+      guideX: xSnap ? xSnap.line : undefined,
+      guideY: ySnap ? ySnap.line : undefined
+    };
+  }
+
+  function constrainMoveDelta(states, delta) {
+    const minimumX = Math.max(...states.map((state) => -MAX_LAYOUT_OFFSET - state.offsetX));
+    const maximumX = Math.min(...states.map((state) => MAX_LAYOUT_OFFSET - state.offsetX));
+    const minimumY = Math.max(...states.map((state) => -MAX_LAYOUT_OFFSET - state.offsetY));
+    const maximumY = Math.min(...states.map((state) => MAX_LAYOUT_OFFSET - state.offsetY));
+    const deltaX = Math.max(minimumX, Math.min(maximumX, delta.deltaX));
+    const deltaY = Math.max(minimumY, Math.min(maximumY, delta.deltaY));
+    return {
+      ...delta,
+      deltaX,
+      deltaY,
+      guideX: deltaX === delta.deltaX ? delta.guideX : undefined,
+      guideY: deltaY === delta.deltaY ? delta.guideY : undefined
+    };
+  }
+
+  function refreshSelectionOverlayGeometry() {
+    const entries = layoutEntries(Array.from(selectedNodeIds));
+    const overlays = Array.from(document.querySelectorAll('.htmlpoint-selection-overlay'));
+    if (!entries.length || !overlays.length) return;
+    const bounds = entries.length === 1
+      ? entries[0].target.getBoundingClientRect()
+      : combinedRect(entries);
+    if (bounds) setOverlayRect(overlays[0], bounds);
+  }
+
+  function postLayoutCommit(patches, label, commandId) {
+    if (!patches.length) return;
+    postToEditor({
+      type: 'htmlpoint-commit-layout',
+      sectionId: selectedSectionId,
+      patches,
+      label,
+      commandId
+    });
+  }
+
+  function finishGestureListeners(move, finish, cancel, keydown, blur) {
+    document.removeEventListener('pointermove', move, true);
+    document.removeEventListener('pointerup', finish, true);
+    document.removeEventListener('pointercancel', cancel, true);
+    document.removeEventListener('keydown', keydown, true);
+    window.removeEventListener('blur', blur);
+  }
+
+  function beginMoveGesture(event, node) {
+    const gestureTarget = event.target instanceof Element ? event.target : null;
+    if (
+      !event.isTrusted ||
+      event.button !== 0 ||
+      activeLayoutGesture ||
+      marquee ||
+      imageArrowModeNodeId === node.id ||
+      imageMosaicModeNodeId === node.id ||
+      gestureTarget?.closest(
+        '[data-htmlpoint-resize-handle], [contenteditable]:not([contenteditable="false"])'
+      )
+    ) return;
+    if (keyboardLayoutGesture) cancelKeyboardNudge();
+    event.stopPropagation();
+    const clickedElement = elementForNode(selectedSectionId, node);
+    const clickedTarget = visualTargetFor(node, clickedElement);
+    const clickedNodeId = layoutSelectionNodeId(node);
+    if (!(clickedTarget instanceof HTMLElement || clickedTarget instanceof SVGElement)) return;
+    let entries = layoutEntries(Array.from(selectedNodeIds));
+    if (!selectedNodeIds.has(clickedNodeId)) {
+      entries = layoutEntries([clickedNodeId]);
+    }
+    const states = entries
+      .map(layoutState)
+      .map((state) => ({
+        ...state,
+        originalElementStyle: state.element instanceof Element ? state.element.getAttribute('style') : undefined
+      }));
+    if (!states.length) return;
+    if (states.some((state) => state.lockPosition)) {
+      postToEditor({
+        type: 'htmlpoint-layout-command-unavailable',
+        reason: '고정 또는 sticky 위치 개체는 이동할 수 없습니다.'
+      });
+      return;
+    }
+    if (states.length > MAX_LAYOUT_OBJECTS) {
+      postToEditor({
+        type: 'htmlpoint-layout-command-unavailable',
+        reason: '한 번에 이동할 수 있는 개체는 256개까지입니다.'
+      });
+      return;
+    }
+    let snapCandidateRects;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const pointerHost = clickedElement;
+    try {
+      if (pointerHost instanceof Element) pointerHost.setPointerCapture(event.pointerId);
+    } catch (_error) {
+      // Document listeners remain as a fallback in restricted preview contexts.
+    }
+    let started = false;
+    let lastDelta = { deltaX: 0, deltaY: 0 };
+    const move = (moveEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return;
+      let rawX = moveEvent.clientX - startX;
+      let rawY = moveEvent.clientY - startY;
+      if (!started && Math.hypot(rawX, rawY) < 4) return;
+      if (moveEvent.shiftKey) {
+        if (Math.abs(rawX) >= Math.abs(rawY)) rawY = 0;
+        else rawX = 0;
+      }
+      if (!started) {
+        started = true;
+        snapCandidateRects = collectSnapCandidateRects(states);
+        document.documentElement.classList.add('htmlpoint-layout-dragging');
+        if (!selectedNodeIds.has(clickedNodeId)) {
+          selectedNodeIds = new Set([clickedNodeId]);
+          selectedNodeId = clickedNodeId;
+          postSelectionMessage('htmlpoint-select-node', clickedNodeId, { ctrlKey: false });
+        }
+      }
+      moveEvent.preventDefault();
+      moveEvent.stopPropagation();
+      lastDelta = constrainMoveDelta(
+        states,
+        snapMove(states, snapCandidateRects || [], rawX, rawY, moveEvent.altKey)
+      );
+      states.forEach((state) =>
+        applyLivePosition(
+          state,
+          state.offsetX + lastDelta.deltaX,
+          state.offsetY + lastDelta.deltaY
+        )
+      );
+      refreshSelectionOverlayGeometry();
+      showSnapGuides(lastDelta.guideX, lastDelta.guideY);
+      const rect = startBoundsFor(states);
+      showLayoutBadge(
+        'X ' + Math.round(lastDelta.deltaX) + '  Y ' + Math.round(lastDelta.deltaY),
+        {
+          ...rect,
+          left: rect.left + lastDelta.deltaX,
+          right: rect.right + lastDelta.deltaX,
+          top: rect.top + lastDelta.deltaY,
+          bottom: rect.bottom + lastDelta.deltaY
+        }
+      );
+    };
+    const cleanup = () => {
+      finishGestureListeners(move, finish, cancel, keydown, blur);
+      if (pointerHost instanceof Element) {
+        pointerHost.removeEventListener('lostpointercapture', cancel);
+      }
+      try {
+        if (pointerHost instanceof Element && pointerHost.hasPointerCapture(event.pointerId)) {
+          pointerHost.releasePointerCapture(event.pointerId);
+        }
+      } catch (_error) {
+        // Pointer capture may already be released by the browser.
+      }
+      clearLayoutFeedback();
+      activeLayoutGesture = null;
+    };
+    const finish = (finishEvent) => {
+      if (finishEvent instanceof PointerEvent && finishEvent.pointerId !== event.pointerId) return;
+      if (started) {
+        suppressClickUntil = Date.now() + 500;
+        postLayoutCommit(
+          states.map((state) =>
+            layoutPatchFor(
+              state,
+              state.offsetX + lastDelta.deltaX,
+              state.offsetY + lastDelta.deltaY
+            )
+          ),
+          states.length > 1 ? '개체 그룹 이동' : '개체 이동'
+        );
+      }
+      cleanup();
+    };
+    const cancel = (cancelEvent) => {
+      if (cancelEvent instanceof PointerEvent && cancelEvent.pointerId !== event.pointerId) return;
+      restoreTransientStates(states);
+      refreshSelectionOverlayGeometry();
+      cleanup();
+    };
+    const keydown = (keyEvent) => {
+      if (keyEvent.key === 'Escape') {
+        keyEvent.preventDefault();
+        cancel();
+      }
+    };
+    const blur = () => cancel();
+    activeLayoutGesture = { cancel };
+    document.addEventListener('pointermove', move, true);
+    document.addEventListener('pointerup', finish, true);
+    document.addEventListener('pointercancel', cancel, true);
+    document.addEventListener('keydown', keydown, true);
+    window.addEventListener('blur', blur, { once: true });
+    if (pointerHost instanceof Element) {
+      pointerHost.addEventListener('lostpointercapture', cancel, { once: true });
+    }
+  }
+
+  function beginResizeGesture(event, entry, direction) {
+    if (!event.isTrusted || event.button !== 0 || activeLayoutGesture || marquee) return;
+    if (keyboardLayoutGesture) cancelKeyboardNudge();
+    event.preventDefault();
+    event.stopPropagation();
+    const state = {
+      ...layoutState(entry),
+      originalElementStyle: entry.element instanceof Element ? entry.element.getAttribute('style') : undefined
+    };
+    if (state.lockSize) {
+      postToEditor({
+        type: 'htmlpoint-layout-command-unavailable',
+        reason: '회전 또는 배율 변형이 적용된 개체는 크기 조절할 수 없습니다.'
+      });
+      return;
+    }
+    if (state.lockPosition && (direction.includes('n') || direction.includes('w'))) {
+      postToEditor({
+        type: 'htmlpoint-layout-command-unavailable',
+        reason: '고정 위치 개체는 오른쪽 또는 아래쪽에서만 크기 조절할 수 있습니다.'
+      });
+      return;
+    }
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const pointerHost = event.currentTarget;
+    try {
+      if (pointerHost instanceof Element) pointerHost.setPointerCapture(event.pointerId);
+    } catch (_error) {
+      // Document listeners remain as a fallback in restricted preview contexts.
+    }
+    const ratio = state.cssWidth / Math.max(1, state.cssHeight);
+    let latest = {
+      width: state.cssWidth,
+      height: state.cssHeight,
+      offsetX: state.offsetX,
+      offsetY: state.offsetY
+    };
+    let changed = false;
+    const move = (moveEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return;
+      const deltaX = moveEvent.clientX - startX;
+      const deltaY = moveEvent.clientY - startY;
+      let width = state.cssWidth;
+      let height = state.cssHeight;
+      if (direction.includes('e')) width = Math.max(MIN_LAYOUT_SIZE, Math.min(MAX_LAYOUT_SIZE, state.cssWidth + deltaX));
+      if (direction.includes('w')) width = Math.max(MIN_LAYOUT_SIZE, Math.min(MAX_LAYOUT_SIZE, state.cssWidth - deltaX));
+      if (!state.lockHeight && direction.includes('s')) height = Math.max(MIN_LAYOUT_SIZE, Math.min(MAX_LAYOUT_SIZE, state.cssHeight + deltaY));
+      if (!state.lockHeight && direction.includes('n')) height = Math.max(MIN_LAYOUT_SIZE, Math.min(MAX_LAYOUT_SIZE, state.cssHeight - deltaY));
+      const corner = direction.length === 2;
+      const preserveRatio = corner && !state.lockHeight && ((state.node.kind === 'image') !== moveEvent.shiftKey);
+      if (preserveRatio) {
+        if (Math.abs(deltaX / Math.max(1, state.cssWidth)) >= Math.abs(deltaY / Math.max(1, state.cssHeight))) {
+          height = Math.max(MIN_LAYOUT_SIZE, Math.min(MAX_LAYOUT_SIZE, width / ratio));
+        } else {
+          width = Math.max(MIN_LAYOUT_SIZE, Math.min(MAX_LAYOUT_SIZE, height * ratio));
+        }
+      }
+      let offsetX = state.offsetX + (direction.includes('w') ? state.cssWidth - width : 0);
+      let offsetY = state.offsetY + (!state.lockHeight && direction.includes('n') ? state.cssHeight - height : 0);
+      offsetX = Math.max(-MAX_LAYOUT_OFFSET, Math.min(MAX_LAYOUT_OFFSET, offsetX));
+      offsetY = Math.max(-MAX_LAYOUT_OFFSET, Math.min(MAX_LAYOUT_OFFSET, offsetY));
+      latest = { width, height, offsetX, offsetY };
+      changed = Math.abs(width - state.cssWidth) >= 0.5 || Math.abs(height - state.cssHeight) >= 0.5;
+      if (direction.includes('w') || direction.includes('n')) {
+        applyLivePosition(state, offsetX, offsetY);
+      }
+      applyLiveSize(
+        state,
+        direction.includes('e') || direction.includes('w') ? width : undefined,
+        !state.lockHeight && (direction.includes('n') || direction.includes('s'))
+          ? height
+          : undefined
+      );
+      refreshSelectionOverlayGeometry();
+      const rect = state.target.getBoundingClientRect();
+      showLayoutBadge(Math.round(rect.width) + ' × ' + Math.round(rect.height), rect);
+      moveEvent.preventDefault();
+      moveEvent.stopPropagation();
+    };
+    const cleanup = () => {
+      finishGestureListeners(move, finish, cancel, keydown, blur);
+      if (pointerHost instanceof Element) {
+        pointerHost.removeEventListener('lostpointercapture', cancel);
+      }
+      try {
+        if (pointerHost instanceof Element && pointerHost.hasPointerCapture(event.pointerId)) {
+          pointerHost.releasePointerCapture(event.pointerId);
+        }
+      } catch (_error) {
+        // Pointer capture may already be released by the browser.
+      }
+      clearLayoutFeedback();
+      activeLayoutGesture = null;
+    };
+    const finish = (finishEvent) => {
+      if (finishEvent instanceof PointerEvent && finishEvent.pointerId !== event.pointerId) return;
+      if (changed) {
+        suppressClickUntil = Date.now() + 500;
+        postLayoutCommit(
+          [resizePatchFor(state, latest, direction)],
+          '개체 크기 조절'
+        );
+      } else {
+        restoreTransientStates([state]);
+      }
+      cleanup();
+    };
+    const cancel = (cancelEvent) => {
+      if (cancelEvent instanceof PointerEvent && cancelEvent.pointerId !== event.pointerId) return;
+      restoreTransientStates([state]);
+      refreshSelectionOverlayGeometry();
+      cleanup();
+    };
+    const keydown = (keyEvent) => {
+      if (keyEvent.key === 'Escape') {
+        keyEvent.preventDefault();
+        cancel();
+      }
+    };
+    const blur = () => cancel();
+    activeLayoutGesture = { cancel };
+    document.documentElement.classList.add('htmlpoint-layout-resizing');
+    document.addEventListener('pointermove', move, true);
+    document.addEventListener('pointerup', finish, true);
+    document.addEventListener('pointercancel', cancel, true);
+    document.addEventListener('keydown', keydown, true);
+    window.addEventListener('blur', blur, { once: true });
+    if (pointerHost instanceof Element) {
+      pointerHost.addEventListener('lostpointercapture', cancel, { once: true });
+    }
+  }
+
+  function applyLayoutDeltas(states, deltas, label, commandId) {
+    if (states.length > MAX_LAYOUT_OBJECTS || states.some((state, index) => {
+      const delta = deltas[index] || { x: 0, y: 0 };
+      return Math.abs(state.offsetX + delta.x) > MAX_LAYOUT_OFFSET ||
+        Math.abs(state.offsetY + delta.y) > MAX_LAYOUT_OFFSET;
+    })) {
+      postToEditor({
+        type: 'htmlpoint-layout-command-unavailable',
+        commandId,
+        reason: '배치 결과가 지원 범위를 벗어납니다.'
+      });
+      return;
+    }
+    const patches = states.map((state, index) => {
+      const delta = deltas[index] || { x: 0, y: 0 };
+      const offsetX = state.offsetX + delta.x;
+      const offsetY = state.offsetY + delta.y;
+      return layoutPatchFor(state, offsetX, offsetY);
+    });
+    postLayoutCommit(patches, label, commandId);
+  }
+
+  function runLayoutCommand(command, commandId) {
+    if (!Number.isInteger(commandId) || commandId <= lastLayoutCommandId) return;
+    lastLayoutCommandId = commandId;
+    if (keyboardLayoutGesture) cancelKeyboardNudge();
+    const entries = layoutEntries(Array.from(selectedNodeIds));
+    if (!entries.length) {
+      postToEditor({ type: 'htmlpoint-layout-command-unavailable', commandId, reason: '개체를 먼저 선택하세요.' });
+      return;
+    }
+    if (entries.length > MAX_LAYOUT_OBJECTS) {
+      postToEditor({ type: 'htmlpoint-layout-command-unavailable', commandId, reason: '한 번에 배치할 수 있는 개체는 256개까지입니다.' });
+      return;
+    }
+    if (entries.some((entry) => !isRenderedLayoutTarget(entry.target))) {
+      postToEditor({ type: 'htmlpoint-layout-command-unavailable', commandId, reason: '화면에 표시되지 않은 개체는 먼저 펼쳐서 선택하세요.' });
+      return;
+    }
+    const states = entries.map(layoutState);
+    if (command === 'reset-position') {
+      const hasMovedObject = states.some((state) =>
+        state.target.hasAttribute('data-htmlpoint-layout-x') ||
+        state.target.hasAttribute('data-htmlpoint-layout-y')
+      );
+      if (!hasMovedObject) {
+        postToEditor({ type: 'htmlpoint-layout-command-unavailable', commandId, reason: '초기화할 이동 값이 없습니다.' });
+        return;
+      }
+      postLayoutCommit(
+        states.map((state) => ({ nodeId: state.nodeId, resetPosition: true })),
+        states.length > 1 ? '개체 그룹 위치 초기화' : '개체 위치 초기화',
+        commandId
+      );
+      return;
+    }
+    if (states.some((state) => state.lockPosition)) {
+      postToEditor({ type: 'htmlpoint-layout-command-unavailable', commandId, reason: '고정 또는 sticky 위치 개체는 정렬할 수 없습니다.' });
+      return;
+    }
+    if ((command === 'distribute-horizontal' || command === 'distribute-vertical') && states.length < 3) {
+      postToEditor({ type: 'htmlpoint-layout-command-unavailable', commandId, reason: '균등 배분은 개체를 3개 이상 선택해야 합니다.' });
+      return;
+    }
+    const slide = selectedSlideElement();
+    if (!(slide instanceof HTMLElement)) {
+      postToEditor({ type: 'htmlpoint-layout-command-unavailable', commandId, reason: 'Section 배치 영역을 찾을 수 없습니다.' });
+      return;
+    }
+    const group = startBoundsFor(states);
+    const reference = states.length === 1 ? slide.getBoundingClientRect() : group;
+    const deltas = states.map(() => ({ x: 0, y: 0 }));
+    if (command === 'align-left') {
+      states.forEach((state, index) => { deltas[index].x = reference.left - state.rect.left; });
+    } else if (command === 'align-center') {
+      const center = reference.left + reference.width / 2;
+      states.forEach((state, index) => { deltas[index].x = center - (state.rect.left + state.rect.width / 2); });
+    } else if (command === 'align-right') {
+      states.forEach((state, index) => { deltas[index].x = reference.right - state.rect.right; });
+    } else if (command === 'align-top') {
+      states.forEach((state, index) => { deltas[index].y = reference.top - state.rect.top; });
+    } else if (command === 'align-middle') {
+      const middle = reference.top + reference.height / 2;
+      states.forEach((state, index) => { deltas[index].y = middle - (state.rect.top + state.rect.height / 2); });
+    } else if (command === 'align-bottom') {
+      states.forEach((state, index) => { deltas[index].y = reference.bottom - state.rect.bottom; });
+    } else if (command === 'distribute-horizontal') {
+      const ordered = states.map((state, index) => ({ state, index })).sort((left, right) => left.state.rect.left - right.state.rect.left);
+      const totalWidth = ordered.reduce((sum, entry) => sum + entry.state.rect.width, 0);
+      const gap = (group.width - totalWidth) / (ordered.length - 1);
+      let cursor = group.left;
+      ordered.forEach((entry) => {
+        deltas[entry.index].x = cursor - entry.state.rect.left;
+        cursor += entry.state.rect.width + gap;
+      });
+    } else if (command === 'distribute-vertical') {
+      const ordered = states.map((state, index) => ({ state, index })).sort((left, right) => left.state.rect.top - right.state.rect.top);
+      const totalHeight = ordered.reduce((sum, entry) => sum + entry.state.rect.height, 0);
+      const gap = (group.height - totalHeight) / (ordered.length - 1);
+      let cursor = group.top;
+      ordered.forEach((entry) => {
+        deltas[entry.index].y = cursor - entry.state.rect.top;
+        cursor += entry.state.rect.height + gap;
+      });
+    } else {
+      return;
+    }
+    if (deltas.every((delta) => Math.abs(delta.x) < 0.01 && Math.abs(delta.y) < 0.01)) {
+      postToEditor({ type: 'htmlpoint-layout-command-unavailable', commandId, reason: '이미 해당 위치로 정렬되어 있습니다.' });
+      return;
+    }
+    applyLayoutDeltas(states, deltas, '개체 정렬', commandId);
+  }
+
+  function semanticLayoutNodeIds() {
+    return layoutEntries(htmlpointNodes.map((node) => node.id), false)
+      .filter((entry) => isRenderedLayoutTarget(entry.target))
+      .map((entry) => representativeNodeIdForTarget(entry.target) || entry.nodeId)
+      .filter(Boolean);
+  }
+
+  function isGeometryShortcutTarget(target) {
+    return target instanceof Element && Boolean(
+      target.isContentEditable ||
+      target.closest(
+        'input, textarea, select, button, a, summary, [role="button"], [contenteditable]:not([contenteditable="false"])'
+      )
+    );
+  }
+
+  function cancelKeyboardNudge() {
+    if (!keyboardLayoutGesture) return;
+    window.clearTimeout(keyboardLayoutGesture.timer);
+    restoreTransientStates(keyboardLayoutGesture.states);
+    keyboardLayoutGesture = null;
+    clearLayoutFeedback();
+    refreshSelectionOverlayGeometry();
+  }
+
+  function flushKeyboardNudge() {
+    const gesture = keyboardLayoutGesture;
+    if (!gesture) return;
+    keyboardLayoutGesture = null;
+    window.clearTimeout(gesture.timer);
+    clearLayoutFeedback();
+    if (Math.abs(gesture.deltaX) < 0.001 && Math.abs(gesture.deltaY) < 0.001) {
+      restoreTransientStates(gesture.states);
+      return;
+    }
+    postLayoutCommit(
+      gesture.states.map((state) =>
+        layoutPatchFor(
+          state,
+          state.offsetX + gesture.deltaX,
+          state.offsetY + gesture.deltaY
+        )
+      ),
+      gesture.states.length > 1 ? '개체 그룹 미세 이동' : '개체 미세 이동'
+    );
+  }
+
+  function nudgeSelection(entries, delta) {
+    if (!keyboardLayoutGesture) {
+      const states = entries.map(layoutState).map((state) => ({
+        ...state,
+        originalElementStyle: state.element instanceof Element
+          ? state.element.getAttribute('style')
+          : undefined
+      }));
+      if (states.some((state) => state.lockPosition)) {
+        postToEditor({
+          type: 'htmlpoint-layout-command-unavailable',
+          reason: '고정 또는 sticky 위치 개체는 이동할 수 없습니다.'
+        });
+        return;
+      }
+      if (states.length > MAX_LAYOUT_OBJECTS) {
+        postToEditor({
+          type: 'htmlpoint-layout-command-unavailable',
+          reason: '한 번에 이동할 수 있는 개체는 256개까지입니다.'
+        });
+        return;
+      }
+      keyboardLayoutGesture = {
+        states,
+        deltaX: 0,
+        deltaY: 0,
+        timer: 0
+      };
+    }
+    const gesture = keyboardLayoutGesture;
+    const constrained = constrainMoveDelta(gesture.states, {
+      deltaX: gesture.deltaX + delta.x,
+      deltaY: gesture.deltaY + delta.y
+    });
+    gesture.deltaX = constrained.deltaX;
+    gesture.deltaY = constrained.deltaY;
+    gesture.states.forEach((state) =>
+      applyLivePosition(
+        state,
+        state.offsetX + gesture.deltaX,
+        state.offsetY + gesture.deltaY
+      )
+    );
+    document.documentElement.classList.add('htmlpoint-layout-dragging');
+    refreshSelectionOverlayGeometry();
+    window.clearTimeout(gesture.timer);
+    gesture.timer = window.setTimeout(flushKeyboardNudge, 1500);
+  }
+
+  function handleLayoutKeyboard(event) {
+    if (!event.isTrusted || event.isComposing || isGeometryShortcutTarget(event.target)) return;
+    if (marquee) return;
+    if (activeLayoutGesture) return;
+    const key = event.key;
+    const isArrow = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(key);
+    if (keyboardLayoutGesture && !isArrow && key !== 'Escape') flushKeyboardNudge();
+    if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === 'a') {
+      const ids = semanticLayoutNodeIds();
+      if (ids.length) {
+        event.preventDefault();
+        selectNodes(ids, true);
+      }
+      return;
+    }
+    if (key === 'Escape') {
+      if (keyboardLayoutGesture) {
+        event.preventDefault();
+        cancelKeyboardNudge();
+        return;
+      }
+      if (selectedNodeIds.size) {
+        event.preventDefault();
+        selectedNodeIds = new Set();
+        selectedNodeId = '';
+        clearSelection();
+        postToEditor({ type: 'htmlpoint-clear-selection', sectionId: selectedSectionId });
+      }
+      return;
+    }
+    if (key === 'Tab') {
+      const ids = semanticLayoutNodeIds();
+      if (!ids.length) return;
+      event.preventDefault();
+      const currentIndex = ids.indexOf(selectedNodeId);
+      const direction = event.shiftKey ? -1 : 1;
+      const nextIndex = currentIndex < 0
+        ? (direction > 0 ? 0 : ids.length - 1)
+        : (currentIndex + direction + ids.length) % ids.length;
+      selectNode(ids[nextIndex], true, false);
+      return;
+    }
+    if (key === 'F2' || key === 'Enter') {
+      const { node, target } = nodeElement(selectedNodeId);
+      if (node && target instanceof HTMLElement && ['text', 'list'].includes(node.kind)) {
+        event.preventDefault();
+        beginInlineTextEdit(target, node, event);
+      }
+      return;
+    }
+    if (!isArrow) return;
+    const entries = layoutEntries(Array.from(selectedNodeIds));
+    if (!entries.length) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 10 : 1;
+    const delta = {
+      x: key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0,
+      y: key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0
+    };
+    nudgeSelection(entries, delta);
+  }
+
+  function finishKeyboardNudge(event) {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+      flushKeyboardNudge();
+    }
   }
 
   function revealTarget(element) {
+    openAncestorDetails(element);
     element.scrollIntoView({ block: 'center', inline: 'center' });
+    requestAnimationFrame(refreshSelectionOverlayGeometry);
   }
 
   function setPreviewPan(x, y) {
@@ -513,30 +1621,45 @@ export function buildPreviewHtml(
     document.body.style.transform = '';
   }
   function nodeElement(nodeId) {
-    const node = htmlpointNodes.find((entry) => entry.id === nodeId);
+    const node = htmlpointNodeById.get(nodeId);
     const target = node ? elementForNode(selectedSectionId, node) : null;
     return { node, target };
   }
-  function paintSelections() {
+  function combinedRect(entries) {
+    if (!entries.length) return null;
+    const rects = entries.map((entry) => entry.target.getBoundingClientRect());
+    const left = Math.min(...rects.map((rect) => rect.left));
+    const top = Math.min(...rects.map((rect) => rect.top));
+    const right = Math.max(...rects.map((rect) => rect.right));
+    const bottom = Math.max(...rects.map((rect) => rect.bottom));
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  }
+  function paintSelections(revealPrimary) {
     clearSelection();
     const ids = Array.from(selectedNodeIds).filter(Boolean);
-    ids.forEach((id) => {
-      const { node, target } = nodeElement(id);
-      if (node && (target instanceof HTMLElement || target instanceof SVGElement)) {
-        const visualTarget = visualTargetFor(node, target);
-        visualTarget.classList.add(id === selectedNodeId ? 'htmlpoint-selected-node' : 'htmlpoint-selected-node-multi');
-        if (ids.length > 1) {
-          visualTarget.classList.add('htmlpoint-selected-node-multi');
-        }
-        if (visualTarget !== target) {
-          target.classList.add('htmlpoint-selected-node-child');
-        }
-        if (id === selectedNodeId) {
-          revealTarget(visualTarget);
-          addHandles(target, node);
-        }
+    const entries = layoutEntries(ids);
+    if (revealPrimary) entries.forEach((entry) => openAncestorDetails(entry.target));
+    entries.forEach((entry) => {
+      entry.target.classList.add(
+        entry.nodeId === selectedNodeId && entries.length === 1
+          ? 'htmlpoint-selected-node'
+          : 'htmlpoint-selected-node-multi'
+      );
+      if (entry.target !== entry.element && entry.element instanceof Element) {
+        entry.element.classList.add('htmlpoint-selected-node-child');
       }
     });
+    if (entries.length === 1) {
+      if (revealPrimary) revealTarget(entries[0].target);
+      addHandles(entries[0]);
+    } else if (entries.length > 1) {
+      const bounds = combinedRect(entries);
+      if (bounds) createSelectionOverlay(bounds, 'htmlpoint-selection-group-overlay');
+      if (revealPrimary) {
+        const primary = entries.find((entry) => entry.nodeId === selectedNodeId) || entries[0];
+        revealTarget(primary.target);
+      }
+    }
   }
   function selectNode(nodeId, announce, additive) {
     const nextIds = new Set(additive ? selectedNodeIds : []);
@@ -549,29 +1672,37 @@ export function buildPreviewHtml(
       nextIds.add(nodeId);
     }
     selectedNodeIds = nextIds;
-    selectedNodeId = Array.from(selectedNodeIds)[0] || nodeId;
-    paintSelections();
+    selectedNodeId = nextIds.has(nodeId) ? nodeId : Array.from(nextIds)[0] || nodeId;
+    paintSelections(false);
     if (announce) {
-      postSelectionMessage('htmlpoint-select-node', nodeId, { ctrlKey: Boolean(additive) });
+      postSelectionMessage('htmlpoint-select-node', selectedNodeId, { ctrlKey: Boolean(additive) });
     }
   }
   function selectNodes(nodeIds, announce) {
-    const validIds = nodeIds.filter((nodeId) => htmlpointNodes.some((node) => node.id === nodeId));
+    let validIds = nodeIds.filter((nodeId) => htmlpointNodeById.has(nodeId));
     if (!validIds.length) return;
+    if (validIds.length > MAX_LAYOUT_OBJECTS) {
+      validIds = validIds.slice(0, MAX_LAYOUT_OBJECTS);
+      postToEditor({
+        type: 'htmlpoint-layout-command-unavailable',
+        reason: '한 번에 선택할 수 있는 개체는 256개까지입니다.'
+      });
+    }
     selectedNodeIds = new Set(validIds);
     selectedNodeId = validIds[0];
-    paintSelections();
+    paintSelections(false);
     if (announce) {
       postSelectionMessage('htmlpoint-select-nodes', selectedNodeId, { nodeIds: validIds, ctrlKey: true });
     }
   }
   function applyEditorSelection(nodeId, nodeIds) {
+    if (keyboardLayoutGesture) cancelKeyboardNudge();
     const requestedIds = Array.isArray(nodeIds)
       ? nodeIds.filter((id) => typeof id === 'string')
       : [];
     const primary = typeof nodeId === 'string' ? nodeId : requestedIds[0];
     const validIds = (requestedIds.length ? requestedIds : primary ? [primary] : [])
-      .filter((id) => htmlpointNodes.some((node) => node.id === id));
+      .filter((id) => htmlpointNodeById.has(id));
     if (!validIds.length) {
       selectedNodeId = undefined;
       selectedNodeIds = new Set();
@@ -579,9 +1710,10 @@ export function buildPreviewHtml(
       return;
     }
 
-    selectedNodeId = validIds.includes(primary) ? primary : validIds[0];
-    selectedNodeIds = new Set(validIds);
-    paintSelections();
+    const limitedIds = validIds.slice(0, MAX_LAYOUT_OBJECTS);
+    selectedNodeId = limitedIds.includes(primary) ? primary : limitedIds[0];
+    selectedNodeIds = new Set(limitedIds);
+    paintSelections(!activeLayoutGesture);
     postSelectionMessage('htmlpoint-select-node', selectedNodeId, { previewSync: true });
   }
   function isImageArrowEligible(element) {
@@ -624,7 +1756,8 @@ export function buildPreviewHtml(
   function addImageArrowDrawing(element, node) {
     if (!(element instanceof HTMLImageElement)) return;
     element.addEventListener('pointerdown', (event) => {
-      if (!event.isTrusted || imageArrowModeNodeId !== node.id) return;
+      if (!event.isTrusted || imageArrowModeNodeId !== node.id || activeLayoutGesture) return;
+      if (keyboardLayoutGesture) cancelKeyboardNudge();
       event.preventDefault();
       event.stopPropagation();
       if (!isImageArrowEligible(element)) {
@@ -641,27 +1774,35 @@ export function buildPreviewHtml(
       const start = normalizedArrowPosition(event, rect);
       const transient = createTransientArrow(rect, event.clientX - rect.left, event.clientY - rect.top);
       const pointerId = event.pointerId;
-      try {
-        element.setPointerCapture(pointerId);
-      } catch (_error) {
-        // Fall back to iframe window listeners when pointer capture is unavailable.
-      }
+      let closed = false;
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        transient.svg.remove();
+        document.removeEventListener('pointermove', update, true);
+        document.removeEventListener('pointerup', finish, true);
+        document.removeEventListener('pointercancel', cancel, true);
+        document.removeEventListener('keydown', cancelOnEscape, true);
+        window.removeEventListener('blur', cancel);
+        element.removeEventListener('lostpointercapture', cancel);
+        try {
+          if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+        } catch (_error) {
+          // Capture can already be gone after cancellation.
+        }
+        imageArrowModeNodeId = '';
+        activeLayoutGesture = null;
+        updateImageArrowMode();
+      };
       const update = (moveEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
         transient.line.setAttribute('x2', String(moveEvent.clientX - rect.left));
         transient.line.setAttribute('y2', String(moveEvent.clientY - rect.top));
       };
       const finish = (finishEvent) => {
+        if (finishEvent.pointerId !== pointerId) return;
         const end = normalizedArrowPosition(finishEvent, rect);
-        transient.svg.remove();
-        window.removeEventListener('pointermove', update);
-        window.removeEventListener('pointerup', finish);
-        try {
-          element.releasePointerCapture(pointerId);
-        } catch (_error) {
-          // Ignore release failures after the iframe fallback path.
-        }
-        imageArrowModeNodeId = '';
-        updateImageArrowMode();
+        cleanup();
         postToEditor({
           type: 'htmlpoint-add-image-arrow',
           nodeId: node.id,
@@ -671,8 +1812,27 @@ export function buildPreviewHtml(
           endY: end.y
         });
       };
-      window.addEventListener('pointermove', update);
-      window.addEventListener('pointerup', finish, { once: true });
+      const cancel = (cancelEvent) => {
+        if (cancelEvent instanceof PointerEvent && cancelEvent.pointerId !== pointerId) return;
+        cleanup();
+      };
+      const cancelOnEscape = (keyEvent) => {
+        if (keyEvent.key !== 'Escape') return;
+        keyEvent.preventDefault();
+        cleanup();
+      };
+      try {
+        element.setPointerCapture(pointerId);
+      } catch (_error) {
+        // Fall back to iframe window listeners when pointer capture is unavailable.
+      }
+      activeLayoutGesture = { cancel };
+      document.addEventListener('pointermove', update, true);
+      document.addEventListener('pointerup', finish, true);
+      document.addEventListener('pointercancel', cancel, true);
+      document.addEventListener('keydown', cancelOnEscape, true);
+      window.addEventListener('blur', cancel, { once: true });
+      element.addEventListener('lostpointercapture', cancel, { once: true });
     });
   }
   function updateImageMosaicMode() {
@@ -684,7 +1844,8 @@ export function buildPreviewHtml(
   function addImageMosaicDrawing(element, node) {
     if (!(element instanceof HTMLImageElement)) return;
     element.addEventListener('pointerdown', (event) => {
-      if (!event.isTrusted || imageMosaicModeNodeId !== node.id) return;
+      if (!event.isTrusted || imageMosaicModeNodeId !== node.id || activeLayoutGesture) return;
+      if (keyboardLayoutGesture) cancelKeyboardNudge();
       event.preventDefault(); event.stopPropagation();
       if (!isImageArrowEligible(element)) {
         imageMosaicModeNodeId = ''; updateImageMosaicMode();
@@ -697,19 +1858,63 @@ export function buildPreviewHtml(
       const box = document.createElement('div');
       box.setAttribute('style', 'position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #6d28d9;background:rgba(109,40,217,.16);');
       document.documentElement.appendChild(box);
+      const pointerId = event.pointerId;
+      let closed = false;
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        box.remove();
+        document.removeEventListener('pointermove', update, true);
+        document.removeEventListener('pointerup', finish, true);
+        document.removeEventListener('pointercancel', cancel, true);
+        document.removeEventListener('keydown', cancelOnEscape, true);
+        window.removeEventListener('blur', cancel);
+        element.removeEventListener('lostpointercapture', cancel);
+        try {
+          if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+        } catch (_error) {
+          // Capture can already be gone after cancellation.
+        }
+        imageMosaicModeNodeId = '';
+        activeLayoutGesture = null;
+        updateImageMosaicMode();
+      };
       const update = (moveEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
         const end = normalizedArrowPosition(moveEvent, rect);
         const left = Math.min(start.x, end.x), top = Math.min(start.y, end.y);
         box.style.left = (rect.left + rect.width * left / 100) + 'px'; box.style.top = (rect.top + rect.height * top / 100) + 'px';
         box.style.width = (rect.width * Math.abs(end.x - start.x) / 100) + 'px'; box.style.height = (rect.height * Math.abs(end.y - start.y) / 100) + 'px';
       };
       const finish = (finishEvent) => {
-        const end = normalizedArrowPosition(finishEvent, rect); box.remove(); window.removeEventListener('pointermove', update);
-        imageMosaicModeNodeId = ''; updateImageMosaicMode();
+        if (finishEvent.pointerId !== pointerId) return;
+        const end = normalizedArrowPosition(finishEvent, rect);
+        cleanup();
         postToEditor({ type: 'htmlpoint-add-image-mosaic', nodeId: node.id,
           left: Math.min(start.x, end.x), top: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) });
       };
-      window.addEventListener('pointermove', update); window.addEventListener('pointerup', finish, { once: true }); update(event);
+      const cancel = (cancelEvent) => {
+        if (cancelEvent instanceof PointerEvent && cancelEvent.pointerId !== pointerId) return;
+        cleanup();
+      };
+      const cancelOnEscape = (keyEvent) => {
+        if (keyEvent.key !== 'Escape') return;
+        keyEvent.preventDefault();
+        cleanup();
+      };
+      try {
+        element.setPointerCapture(pointerId);
+      } catch (_error) {
+        // Fall back to document listeners when capture is unavailable.
+      }
+      activeLayoutGesture = { cancel };
+      document.addEventListener('pointermove', update, true);
+      document.addEventListener('pointerup', finish, true);
+      document.addEventListener('pointercancel', cancel, true);
+      document.addEventListener('keydown', cancelOnEscape, true);
+      window.addEventListener('blur', cancel, { once: true });
+      element.addEventListener('lostpointercapture', cancel, { once: true });
+      update(event);
     });
   }
   window.addEventListener('message', (event) => {
@@ -717,6 +1922,34 @@ export function buildPreviewHtml(
     if (event.source !== window.parent || data.source !== 'htmlpoint-editor') return;
     if (data.type === 'htmlpoint-set-selection') {
       applyEditorSelection(data.selectedNodeId, data.selectedNodeIds);
+      return;
+    }
+    if (data.type === 'htmlpoint-set-editor-zoom') {
+      const zoom = Number(data.zoom);
+      if (Number.isFinite(zoom) && zoom >= 25 && zoom <= 400) {
+        document.documentElement.style.setProperty(
+          '--htmlpoint-handle-scale',
+          String(100 / zoom)
+        );
+      }
+      return;
+    }
+    if (
+      data.type === 'htmlpoint-run-layout-command' &&
+      data.previewRevision === previewRevision &&
+      [
+        'align-left',
+        'align-center',
+        'align-right',
+        'align-top',
+        'align-middle',
+        'align-bottom',
+        'distribute-horizontal',
+        'distribute-vertical',
+        'reset-position'
+      ].includes(data.command)
+    ) {
+      runLayoutCommand(data.command, data.commandId);
       return;
     }
     if (data.type === 'htmlpoint-set-image-arrow-mode') {
@@ -736,15 +1969,31 @@ export function buildPreviewHtml(
       left.bottom >= right.top;
   }
   function beginMarquee(event) {
-    if (!event.ctrlKey && !event.metaKey) return;
-    if (!(event.currentTarget instanceof HTMLElement)) return;
+    if (
+      !event.isTrusted ||
+      event.button !== 0 ||
+      activeLayoutGesture ||
+      marquee ||
+      !(event.currentTarget instanceof HTMLElement)
+    ) return;
+    if (keyboardLayoutGesture) cancelKeyboardNudge();
+    const pointerTarget = event.target instanceof Element ? event.target : null;
+    if (
+      pointerTarget?.closest(
+        '[data-htmlpoint-node-id], [data-htmlpoint-runtime-wired="true"], a, button, input, textarea, select, summary, [contenteditable]:not([contenteditable="false"])'
+      )
+    ) return;
     event.preventDefault();
+    const pointerHost = event.currentTarget;
+    const pointerId = event.pointerId;
+    const additive = event.ctrlKey || event.metaKey || event.shiftKey;
     const startX = event.clientX;
     const startY = event.clientY;
     marquee = document.createElement('div');
     marquee.className = 'htmlpoint-marquee';
     document.documentElement.appendChild(marquee);
     const updateMarquee = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId || !marquee) return;
       const left = Math.min(startX, moveEvent.clientX);
       const top = Math.min(startY, moveEvent.clientY);
       const width = Math.abs(moveEvent.clientX - startX);
@@ -754,30 +2003,91 @@ export function buildPreviewHtml(
       marquee.style.width = width + 'px';
       marquee.style.height = height + 'px';
     };
-    const finishMarquee = () => {
-      const selectionRect = marquee.getBoundingClientRect();
-      const selectedIds = htmlpointNodes
-        .filter((node) => {
-          const { target } = nodeElement(node.id);
-          return (target instanceof HTMLElement || target instanceof SVGElement) &&
-            rectsIntersect(selectionRect, target.getBoundingClientRect());
-        })
-        .map((node) => node.id);
-      marquee.remove();
+    const candidates = layoutEntries(htmlpointNodes.map((node) => node.id), false)
+      .filter((entry) => isRenderedLayoutTarget(entry.target));
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      marquee?.remove();
       marquee = null;
-      document.removeEventListener('pointermove', updateMarquee);
-      document.removeEventListener('pointerup', finishMarquee);
-      if (selectedIds.length) {
-        selectNodes(selectedIds, true);
+      document.removeEventListener('pointermove', updateMarquee, true);
+      document.removeEventListener('pointerup', finishMarquee, true);
+      document.removeEventListener('pointercancel', cancelMarquee, true);
+      document.removeEventListener('keydown', cancelMarqueeOnEscape, true);
+      window.removeEventListener('blur', cancelMarquee);
+      pointerHost.removeEventListener('lostpointercapture', cancelMarquee);
+      try {
+        if (pointerHost.hasPointerCapture(pointerId)) pointerHost.releasePointerCapture(pointerId);
+      } catch (_error) {
+        // Pointer capture may already be gone after an OS-level cancellation.
       }
     };
+    const finishMarquee = (finishEvent) => {
+      if (finishEvent.pointerId !== pointerId || !marquee) return;
+      const selectionRect = marquee.getBoundingClientRect();
+      let selectedIds = candidates
+        .filter((entry) => rectsIntersect(selectionRect, entry.target.getBoundingClientRect()))
+        .map((entry) => representativeNodeIdForTarget(entry.target) || entry.nodeId);
+      const isClick = selectionRect.width < 4 && selectionRect.height < 4;
+      cleanup();
+      if (isClick && !additive) {
+        selectedNodeIds = new Set();
+        selectedNodeId = '';
+        clearSelection();
+        postToEditor({ type: 'htmlpoint-clear-selection', sectionId: selectedSectionId });
+        return;
+      }
+      if (selectedIds.length > MAX_LAYOUT_OBJECTS) {
+        selectedIds = selectedIds.slice(0, MAX_LAYOUT_OBJECTS);
+        postToEditor({
+          type: 'htmlpoint-layout-command-unavailable',
+          reason: '한 번에 선택할 수 있는 개체는 256개까지입니다.'
+        });
+      }
+      const nextIds = additive
+        ? Array.from(new Set(Array.from(selectedNodeIds).concat(selectedIds)))
+        : selectedIds;
+      if (nextIds.length) {
+        selectNodes(nextIds, true);
+      } else if (!additive) {
+        selectedNodeIds = new Set();
+        selectedNodeId = '';
+        clearSelection();
+        postToEditor({ type: 'htmlpoint-clear-selection', sectionId: selectedSectionId });
+      }
+    };
+    const cancelMarquee = (cancelEvent) => {
+      if (cancelEvent instanceof PointerEvent && cancelEvent.pointerId !== pointerId) return;
+      cleanup();
+    };
+    const cancelMarqueeOnEscape = (keyEvent) => {
+      if (keyEvent.key !== 'Escape') return;
+      keyEvent.preventDefault();
+      cleanup();
+    };
+    try {
+      pointerHost.setPointerCapture(pointerId);
+    } catch (_error) {
+      // Capture can be unavailable in restricted iframe contexts; blur/Escape still clean up.
+    }
     updateMarquee(event);
-    document.addEventListener('pointermove', updateMarquee);
-    document.addEventListener('pointerup', finishMarquee, { once: true });
+    document.addEventListener('pointermove', updateMarquee, true);
+    document.addEventListener('pointerup', finishMarquee, true);
+    document.addEventListener('pointercancel', cancelMarquee, true);
+    document.addEventListener('keydown', cancelMarqueeOnEscape, true);
+    window.addEventListener('blur', cancelMarquee, { once: true });
+    pointerHost.addEventListener('lostpointercapture', cancelMarquee, { once: true });
   }
 
   document.addEventListener('click', (event) => {
     if (!event.isTrusted) return;
+    if (Date.now() < suppressClickUntil) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      suppressClickUntil = 0;
+      return;
+    }
     const target = event.target instanceof Element ? event.target : null;
     const anchor = target && target.closest('a[href]');
     if (!(anchor instanceof HTMLAnchorElement)) return;
@@ -839,6 +2149,12 @@ export function buildPreviewHtml(
 
   document.addEventListener('click', (event) => {
     if (!event.isTrusted) return;
+    if (Date.now() < suppressClickUntil) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      suppressClickUntil = 0;
+      return;
+    }
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[data-htmlpoint-runtime-wired="true"]')) return;
     const object = target && target.closest('[data-htmlpoint-node-id][data-htmlpoint-section-id]');
@@ -847,13 +2163,14 @@ export function buildPreviewHtml(
     const nodeId = object.getAttribute('data-htmlpoint-node-id') || '';
     if (!sectionId || sectionId === selectedSectionId || !nodeId) return;
     const section = htmlpointSections.find((entry) => entry.id === sectionId);
-    if (!section || !section.nodes.some((node) => node.id === nodeId)) return;
+    const node = section?.nodes.find((candidate) => candidate.id === nodeId);
+    if (!section || !node) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     postToEditor({
       type: 'htmlpoint-select-section-node',
       sectionId,
-      nodeId
+      nodeId: layoutSelectionNodeId(node, sectionId)
     });
   }, true);
 
@@ -900,6 +2217,7 @@ export function buildPreviewHtml(
     document.documentElement.style.scrollBehavior = 'auto';
     document.body.style.overflow = 'auto';
     document.body.style.scrollBehavior = 'auto';
+    primePreviewObjectCaches();
     const langButton = document.querySelector('[data-lang="' + language + '"]');
     if (langButton instanceof HTMLElement) {
       langButton.click();
@@ -920,12 +2238,19 @@ export function buildPreviewHtml(
       selected.style.outline = '3px solid #0f6cbd';
       selected.style.outlineOffset = '4px';
       selected.addEventListener('pointerdown', beginMarquee);
+      document.addEventListener('keydown', handleLayoutKeyboard, true);
+      document.addEventListener('keyup', finishKeyboardNudge, true);
+      window.addEventListener('blur', cancelKeyboardNudge);
+      window.addEventListener('scroll', refreshSelectionOverlayGeometry, true);
+      window.addEventListener('resize', refreshSelectionOverlayGeometry);
       htmlpointNodes.forEach((node) => {
         const element = elementForNode(selectedSectionId, node);
         if (element instanceof HTMLElement || element instanceof SVGElement) {
           element.classList.add('htmlpoint-preview-node');
           element.setAttribute('data-htmlpoint-node-id', node.id);
-          element.setAttribute('title', node.kind.toUpperCase() + ' · ' + node.label);
+          element.setAttribute('draggable', 'false');
+          element.setAttribute('title', node.kind.toUpperCase() + ' · 드래그하여 이동 · 더블클릭하여 편집');
+          element.addEventListener('pointerdown', (event) => beginMoveGesture(event, node));
           element.addEventListener('click', (event) => {
             if (!event.isTrusted) return;
             event.preventDefault();
@@ -934,7 +2259,11 @@ export function buildPreviewHtml(
               beginInlineTextEdit(element, node, event);
               return;
             }
-            selectNode(node.id, true, event.ctrlKey || event.metaKey);
+            selectNode(
+              layoutSelectionNodeId(node),
+              true,
+              event.ctrlKey || event.metaKey || event.shiftKey
+            );
           });
           element.addEventListener('dblclick', (event) => {
             if (event.isTrusted) beginInlineTextEdit(element, node, event);
@@ -960,7 +2289,7 @@ export function buildPreviewHtml(
         selected.scrollIntoView({ block: 'center', inline: 'nearest' });
       }
       if (selectedNodeId || selectedNodeIds.size) {
-        paintSelections();
+        paintSelections(true);
         if (selectedNodeId) {
           postSelectionMessage('htmlpoint-select-node', selectedNodeId, { previewSync: true });
         }
@@ -997,6 +2326,10 @@ export function buildPreviewHtml(
       }
       element.dataset.htmlpointNodeId = node.id;
       element.dataset.htmlpointSectionId = sectionId;
+      const layoutTarget = getElementByPath(slide, node.layoutPath);
+      if (layoutTarget instanceof HTMLElement || layoutTarget instanceof SVGElement) {
+        layoutTarget.dataset.htmlpointPreviewLayoutKey = node.layoutPath.join('.');
+      }
     });
     if (sectionId === selectedSectionId && focusPath?.length) {
       const focusTarget = getElementByPath(slide, focusPath);

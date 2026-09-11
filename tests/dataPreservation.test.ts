@@ -238,6 +238,7 @@ describe('data preservation', () => {
           source: getPreviewWindow(),
           data: {
             source: 'htmlpoint-preview',
+            previewRevision: getPreviewRevision(),
             type: 'htmlpoint-edit-text',
             nodeId: 'section-1:text:0',
             text: '새 설명'
@@ -263,6 +264,7 @@ describe('data preservation', () => {
         source: getPreviewWindow(),
         data: {
           source: 'htmlpoint-preview',
+          previewRevision: getPreviewRevision(),
           type: 'htmlpoint-edit-text',
           nodeId: 'section-1:text:0',
           text
@@ -465,6 +467,7 @@ describe('data preservation', () => {
           source: getPreviewWindow(),
           data: {
             source: 'htmlpoint-preview',
+            previewRevision: getPreviewRevision(),
             type: 'htmlpoint-select-node',
             nodeId: 'section-1:chart:0'
           }
@@ -668,4 +671,14 @@ function getPreviewWindow(): Window {
     throw new Error('Preview iframe window is unavailable.');
   }
   return previewWindow;
+}
+
+function getPreviewRevision(): string {
+  const previewRevision = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Report preview"]'
+  )?.dataset.previewRevision;
+  if (!previewRevision) {
+    throw new Error('Preview revision is unavailable.');
+  }
+  return previewRevision;
 }

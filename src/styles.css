@@ -330,6 +330,19 @@ select[data-tooltip]:focus-visible::after {
   color: var(--danger);
 }
 
+.arrange-tool {
+  justify-content: center;
+  min-width: 54px;
+  border-color: var(--line);
+  background: #fff;
+}
+.arrange-reference-note {
+  align-self: center;
+  color: #616161;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .sample-select {
   width: 150px;
   height: 30px;
@@ -797,6 +810,56 @@ select[data-tooltip]:focus-visible::after {
   font-size: 12px;
   line-height: 1.35;
   padding: 8px 10px;
+}
+
+.layout-inspector {
+  display: grid;
+  gap: 9px;
+  margin: 10px 0 14px;
+  border: 1px solid #d9e4f2;
+  border-radius: 6px;
+  background: #f8fbff;
+  padding: 10px;
+}
+
+.layout-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.layout-ratio-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #3d4652;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.layout-ratio-toggle input {
+  width: auto;
+}
+
+.layout-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.layout-error {
+  color: #a4262c;
+}
+
+.layout-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.layout-actions .blue-button,
+.layout-actions .secondary-button {
+  width: 100%;
 }
 
 .inspector-section {

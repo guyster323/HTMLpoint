@@ -4,8 +4,11 @@ const EDITOR_MARKERS = [
   'htmlpoint-selection-overlay',
   'htmlpoint-select-handle',
   'htmlpoint-marquee',
+  'htmlpoint-layout-guide',
+  'htmlpoint-layout-badge',
   'htmlpoint-runtime-table',
   'htmlpoint-source-path',
+  'htmlpoint-preview-layout-key',
   'htmlpoint-section-id',
   'htmlpoint-preview-section',
   'htmlpoint-serialized-section',
@@ -19,12 +22,25 @@ const EDITOR_CLASSES = [
   'htmlpoint-selected-node-multi',
   'htmlpoint-selected-node-child',
   'htmlpoint-selection-overlay',
+  'htmlpoint-selection-overlay-multi',
+  'htmlpoint-selection-group-overlay',
   'htmlpoint-select-handle',
   'htmlpoint-select-handle-nw',
   'htmlpoint-select-handle-ne',
   'htmlpoint-select-handle-sw',
   'htmlpoint-select-handle-se',
+  'htmlpoint-select-handle-n',
+  'htmlpoint-select-handle-e',
+  'htmlpoint-select-handle-s',
+  'htmlpoint-select-handle-w',
+  'htmlpoint-select-handle-disabled',
   'htmlpoint-marquee',
+  'htmlpoint-layout-guide',
+  'htmlpoint-layout-guide-x',
+  'htmlpoint-layout-guide-y',
+  'htmlpoint-layout-badge',
+  'htmlpoint-layout-dragging',
+  'htmlpoint-layout-resizing',
   'htmlpoint-runtime-table'
 ];
 
@@ -43,13 +59,14 @@ export function stripEditorArtifacts(document: Document): boolean {
     }
   });
   document.querySelectorAll<HTMLElement>(
-    '[data-htmlpoint-node-id], [data-htmlpoint-section-id], [data-htmlpoint-preview-section], [data-htmlpoint-serialized-section], [data-htmlpoint-source-path], [data-htmlpoint-focus-target], [data-htmlpoint-runtime-wired]'
+    '[data-htmlpoint-node-id], [data-htmlpoint-section-id], [data-htmlpoint-preview-section], [data-htmlpoint-serialized-section], [data-htmlpoint-source-path], [data-htmlpoint-preview-layout-key], [data-htmlpoint-focus-target], [data-htmlpoint-runtime-wired]'
   ).forEach((element) => {
     element.removeAttribute('data-htmlpoint-node-id');
     element.removeAttribute('data-htmlpoint-section-id');
     element.removeAttribute('data-htmlpoint-preview-section');
     element.removeAttribute('data-htmlpoint-serialized-section');
     element.removeAttribute('data-htmlpoint-source-path');
+    element.removeAttribute('data-htmlpoint-preview-layout-key');
     element.removeAttribute('data-htmlpoint-focus-target');
     element.removeAttribute('data-htmlpoint-runtime-wired');
     changed = true;
@@ -57,7 +74,7 @@ export function stripEditorArtifacts(document: Document): boolean {
 
   document
     .querySelectorAll<HTMLElement>(
-      '.htmlpoint-selection-overlay, .htmlpoint-select-handle, .htmlpoint-marquee'
+      '.htmlpoint-selection-overlay, .htmlpoint-select-handle, .htmlpoint-marquee, .htmlpoint-layout-guide, .htmlpoint-layout-badge'
     )
     .forEach((element) => {
       element.remove();
@@ -108,6 +125,8 @@ function hasVisibleEditorLeak(value: string): boolean {
     compact.includes('.htmlpoint-preview-node') ||
     compact.includes('.htmlpoint-selected-node') ||
     compact.includes('.htmlpoint-selection-overlay') ||
+    compact.includes('.htmlpoint-layout-guide') ||
+    compact.includes('.htmlpoint-layout-badge') ||
     compact.includes('source: htmlpoint-preview') ||
     compact.includes("source: 'htmlpoint-preview'") ||
     compact.includes('htmlpoint-select-handle')

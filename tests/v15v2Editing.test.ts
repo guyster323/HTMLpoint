@@ -87,7 +87,8 @@ describe('v1.5/v2 editing improvements', () => {
     expect(report.sections[0].html).toContain('height="270"');
 
     const preview = buildPreviewHtml(report, section.id, 'ko', image.id);
-    expect(preview).toContain('htmlpoint-resize-image');
+    expect(preview).toContain('htmlpoint-commit-layout');
+    expect(preview).toContain('data-htmlpoint-resize-handle');
     expect(preview).toContain('pointerdown');
   });
 });

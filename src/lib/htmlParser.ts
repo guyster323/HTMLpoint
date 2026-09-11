@@ -14,7 +14,7 @@ import {
 import { snapshotChart } from './chartAdapters';
 import { elementPathKey, getElementByPath, getElementPath, makeNodeId } from './domPaths';
 import { serializeFullDocument, stripEditorArtifacts } from './editorArtifacts';
-
+import { findImageFrame, TABLE_LAYOUT_TARGET_SELECTOR } from './layoutTargets';
 export { snapshotChart } from './chartAdapters';
 
 const SLIDE_SELECTOR = 'header, section';
@@ -311,6 +311,7 @@ export function collectEditableNodes(
       return;
     }
     const path = getElementPath(sectionElement, element);
+    const frame = findImageFrame(element, sectionElement);
     nodes.push({
       id: makeNodeId(sectionId, path, 'image'),
       sectionId,
@@ -326,9 +327,10 @@ export function collectEditableNodes(
         width: element.getAttribute('width') ?? parseStyleSize(element.getAttribute('style'), 'width'),
         height: element.getAttribute('height') ?? parseStyleSize(element.getAttribute('style'), 'height'),
         style: element.getAttribute('style') ?? undefined,
-        frameWidth: getImageFrameElement(element)?.getAttribute('width') ?? parseStyleSize(getImageFrameElement(element)?.getAttribute('style') ?? null, 'width'),
-        frameHeight: getImageFrameElement(element)?.getAttribute('height') ?? parseStyleSize(getImageFrameElement(element)?.getAttribute('style') ?? null, 'height'),
-        frameStyle: getImageFrameElement(element)?.getAttribute('style') ?? undefined
+        frameWidth: frame?.getAttribute('width') ?? parseStyleSize(frame?.getAttribute('style') ?? null, 'width'),
+        frameHeight: frame?.getAttribute('height') ?? parseStyleSize(frame?.getAttribute('style') ?? null, 'height'),
+        frameStyle: frame?.getAttribute('style') ?? undefined,
+        hasFrame: Boolean(frame)
       }
     });
   });
@@ -352,8 +354,99 @@ export function collectEditableNodes(
       chartPresentation: snapshotChartPresentation(element, id)
     });
   });
+  return assignLayoutTargetPaths(sectionElement, nodes);
+}
 
-  return nodes;
+const BLOCK_LAYOUT_TAGS = new Set([
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'p',
+  'li',
+  'figcaption',
+  'caption',
+  'summary',
+  'blockquote'
+]);
+
+function assignLayoutTargetPaths(
+  sectionElement: HTMLElement,
+  nodes: EditableNode[]
+): EditableNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    layoutTargetPath: resolveLayoutTargetPath(sectionElement, nodes, node)
+  }));
+}
+
+function resolveLayoutTargetPath(
+  sectionElement: HTMLElement,
+  nodes: EditableNode[],
+  node: EditableNode
+): number[] {
+  const element = getElementByPath(sectionElement, node.path);
+  if (!(element instanceof HTMLElement) && !(element instanceof SVGElement)) {
+    return node.path;
+  }
+
+  if (node.kind === 'table' && element instanceof HTMLTableElement) {
+    const wrapper = element.parentElement;
+    if (
+      wrapper &&
+      wrapper !== sectionElement &&
+      wrapper.matches(
+        TABLE_LAYOUT_TARGET_SELECTOR
+      )
+    ) {
+      return getElementPath(sectionElement, wrapper);
+    }
+    return node.path;
+  }
+
+  const containingTable = nodes
+    .filter(
+      (candidate) =>
+        candidate.kind === 'table' &&
+        isStrictPathPrefix(candidate.path, node.path)
+    )
+    .sort((left, right) => right.path.length - left.path.length)[0];
+  if (containingTable) {
+    return resolveLayoutTargetPath(sectionElement, nodes, containingTable);
+  }
+
+  if (node.kind === 'image' && element instanceof HTMLImageElement) {
+    const frame = findImageFrame(element, sectionElement);
+    return frame ? getElementPath(sectionElement, frame) : node.path;
+  }
+
+  if (node.kind === 'text' || node.kind === 'list') {
+    if (BLOCK_LAYOUT_TAGS.has(node.tagName)) {
+      return node.path;
+    }
+    const blockAncestor = nodes
+      .filter(
+        (candidate) =>
+          (candidate.kind === 'text' || candidate.kind === 'list') &&
+          BLOCK_LAYOUT_TAGS.has(candidate.tagName) &&
+          isStrictPathPrefix(candidate.path, node.path)
+      )
+      .sort((left, right) => right.path.length - left.path.length)[0];
+    if (blockAncestor) {
+      return blockAncestor.path;
+    }
+  }
+
+  return node.path;
+}
+
+function isStrictPathPrefix(parent: number[], child: number[]): boolean {
+  return (
+    parent.length < child.length &&
+    parent.every((part, index) => child[index] === part)
+  );
 }
 
 export function readChartPresentation(
@@ -632,18 +725,6 @@ function snapshotTextStyle(element: HTMLElement): {
     color: style.color || undefined
   };
 }
-
-function getImageFrameElement(image: HTMLImageElement): HTMLElement | null {
-  const parent = image.parentElement;
-  if (!parent || parent.tagName.toLowerCase() === 'section' || parent.tagName.toLowerCase() === 'header') {
-    return null;
-  }
-  if (parent.children.length > 3) {
-    return null;
-  }
-  return parent;
-}
-
 function getSectionKind(element: HTMLElement): ReportSectionKind {
   if (element.tagName.toLowerCase() === 'header') {
     return 'header';

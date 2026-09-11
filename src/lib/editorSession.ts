@@ -1,4 +1,5 @@
 import type { EditResult, ReportDocument, ReportSection } from '../types/htmlpoint';
+import { semanticLayoutNodes } from './objectLayout';
 import { findSectionForLanguage, getVisibleSections } from './sectionNavigation';
 
 export interface EditorSelection {
@@ -137,7 +138,7 @@ export function editorSessionReducer(
         state.selection.sectionId,
         action.language
       );
-      const nodeId = section?.editableNodes[0]?.id;
+      const nodeId = firstLayoutNodeId(section);
       return {
         ...state,
         report: { ...state.report, activeLanguage: action.language },
@@ -322,7 +323,7 @@ export function normalizeSelection(
   );
   const nodeId = currentNodeIsValid
     ? current.nodeId
-    : validNodeIds[0] ?? section.editableNodes[0]?.id;
+    : validNodeIds[0] ?? firstLayoutNodeId(section);
   const nodeIds = currentNodeIsValid
     ? validNodeIds.includes(nodeId!)
       ? validNodeIds
@@ -371,8 +372,7 @@ export function selectionAfterSectionDelete(
       cell: { row: 0, cell: 0 }
     });
   }
-
-  const nodeId = section.editableNodes[0]?.id;
+  const nodeId = firstLayoutNodeId(section);
   return {
     sectionId: section.id,
     nodeId,
@@ -410,6 +410,10 @@ export function selectionAfterTableMutation(
 
 function hasNode(section: ReportSection, nodeId: string): boolean {
   return section.editableNodes.some((node) => node.id === nodeId);
+}
+
+function firstLayoutNodeId(section?: ReportSection): string | undefined {
+  return section ? semanticLayoutNodes(section.editableNodes)[0]?.id : undefined;
 }
 
 function sameIds(left: string[], right: string[]): boolean {
