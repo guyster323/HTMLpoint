@@ -1,0 +1,4 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Dynamic report fixture</title><style>section{padding:32px}svg{width:300px;height:200px}table{border-collapse:collapse}td,th{border:1px solid #888;padding:8px}</style></head><body><section id="visuals"><h1>동적 측정 차트</h1>
+<svg viewBox="0 0 200 180" role="img" aria-label="Measurement bars"><line x1="10" y1="150" x2="190" y2="150"/><rect x="30" y="100" width="30" height="50" fill="#2457a6"><title>A: 10 units</title></rect><text x="45" y="94">10u</text><rect x="90" y="50" width="30" height="100" fill="#d45a38"><title>B: 20 units</title></rect><text x="105" y="44">20u</text></svg>
+<details open><summary>Rack Heatmap</summary><div class="rack-heatmap-host"></div></details>
+</section><script>document.querySelector('.rack-heatmap-host').innerHTML='<table class="heatmap-table"><tr><th>Rack</th><th>Value</th></tr><tr><td>A</td><td>42</td></tr></table>';</script></body></html>

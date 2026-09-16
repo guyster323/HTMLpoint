@@ -27,7 +27,10 @@ describe('preview stabilization', () => {
     expect(calculateFitZoom).toBeTypeOf('function');
     expect(calculateFitZoom?.(820, 1120, 28)).toBe(68);
     expect(calculateFitZoom?.(4000, 1120, 28)).toBe(100);
-    expect(calculateFitZoom?.(100, 1120, 28)).toBe(50);
+    expect(calculateFitZoom?.(100, 1120, 28)).toBe(3);
+    for (const stageWidth of [250, 350, 450, 650]) {
+      expect(1120 * calculateFitZoom!(stageWidth, 1120, 28) / 100 + 56).toBeLessThanOrEqual(stageWidth);
+    }
   });
 
   it('injects the supplied base into preview only without mutating source HTML', () => {
@@ -95,6 +98,10 @@ describe('preview stabilization', () => {
     }
     expect(element('relative').hasAttribute('srcset')).toBe(false);
     expect(element('remote').hasAttribute('srcset')).toBe(false);
+    expect(element('relative').tagName).toBe('SPAN');
+    expect(element('relative').getAttribute('role')).toBe('img');
+    expect(element('relative').getAttribute('aria-label')).toContain('본문에서 확인');
+    expect(document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content')).toContain("default-src 'none'");
     expect(element('mixed').hasAttribute('srcset')).toBe(false);
     expect(element('mixed-no-descriptor').hasAttribute('srcset')).toBe(false);
     expect(element('nbsp-data-srcset').hasAttribute('srcset')).toBe(false);

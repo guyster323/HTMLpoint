@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Real-Electron E2E (`npm run test:e2e:electron`) covering open, edit, Undo/Redo, autosave, Save/Save As with relative assets, reopen, merged tables, language switching and SVG chart data edits.
+- Bundled synthetic report fixtures (relative assets, merged table, multilingual, dynamic table/SVG chart) that are always checked; `npm run test:local-samples` fails instead of skipping when approved field samples are absent.
+- Chromium IME composition regression (`tests/e2e/electron-composition.cjs`) for Hangul composition guards in Properties and inline editing.
+- `npm run verify:nsis` silent install/launch/uninstall smoke for the Windows NSIS installer, also run in the release workflow.
+- Dev mode now compiles and watches Electron main/preload and restarts the app through the unsaved-document guard.
+
+### Changed
+
+- `verify:release` and the release workflow run build → unit → renderer E2E → Electron E2E → `package:built` → NSIS smoke so the packaged renderer is the one that was tested.
+- Fit and manual zoom may go below 50% so the page fits the canvas at 900/1024/1280px windows.
+- Properties panel collapses Size & Position by default, scrolls to the top when the selected object changes, flags unapplied text and applies it with `Ctrl+Enter`.
+- Section thumbnails show a named placeholder instead of a broken image for stripped external/relative images.
+- Renderer performance E2E waits for preview readiness, image load and object selection and records a 3-run median.
+
+### Fixed
+
+- Escape during inline text editing restored `<strong>`/`<a>` content as plain text; the original DOM nodes are now kept and restored.
+- Silent NSIS install could crash in `System.dll` (`0xc0000005`) on a fresh per-user install: electron-builder 25's `multiUser.nsh` fixed-length known-folder copy is patched to `lstrcpynW` before packaging (QA-07).
+
 ## 0.3.0 - 2026-09-11
 
 ### Added

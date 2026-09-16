@@ -822,6 +822,42 @@ select[data-tooltip]:focus-visible::after {
   padding: 10px;
 }
 
+.layout-group {
+  margin: 10px 0;
+  border: 1px solid #d9e4f2;
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.layout-group > summary {
+  cursor: pointer;
+  padding: 10px;
+  color: #3d4652;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.layout-group > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.layout-group .layout-inspector {
+  margin: 0;
+  border: 0;
+}
+
+.layout-group .layout-inspector > .style-title {
+  display: none;
+}
+
+.draft-note {
+  margin: 0 0 8px;
+  color: #805600;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .layout-field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

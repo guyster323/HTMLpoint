@@ -7,7 +7,7 @@ import { EditableNode, ObjectLayoutCommand, ReportDocument } from '../types/html
 
 const PAGE_WIDTH = 1120;
 const STAGE_PADDING = 28;
-const MIN_ZOOM = 50;
+const MIN_ZOOM = 1;
 const MAX_FIT_ZOOM = 100;
 const UNAVAILABLE_PREVIEW_BASE = 'htmlpoint-asset://unavailable/';
 

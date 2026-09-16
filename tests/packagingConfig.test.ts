@@ -27,6 +27,30 @@ describe('packaged Electron renderer configuration', () => {
     expect(workflow).toContain('npm run package');
     expect(workflow).toContain('SHA256SUMS.txt');
     expect(workflow).toContain('gh release create');
+    expect(workflow).toContain('verify-windows-nsis');
+    expect(workflow.indexOf('npm run build')).toBeLessThan(workflow.indexOf('npm run test:e2e:renderer'));
+    expect(workflow.indexOf('npm run test:e2e:electron')).toBeLessThan(workflow.indexOf('npm run package:built'));
+    const { scripts } = JSON.parse(readFileSync('package.json', 'utf8'));
+    expect(scripts['verify:release'].indexOf('npm run build')).toBeLessThan(scripts['verify:release'].indexOf('npm run test:e2e:renderer'));
+    expect(scripts['verify:release']).toMatch(/&& npm run package:built && npm run verify:nsis$/);
+    expect(scripts['package:built']).not.toContain('npm run build');
+    expect(scripts['package:built']).toContain('apply-nsis-multiuser-patch');
+    expect(scripts['verify:nsis']).toBe('node scripts/verify-windows-nsis.mjs');
+  });
+  it('patches the electron-builder per-user known-folder copy that crashes System.dll', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const { patchMultiUserNsh, UNSAFE_MARKER, SAFE_MARKER } = await import('../scripts/apply-nsis-multiuser-patch.mjs');
+    const templatePath = 'node_modules/app-builder-lib/templates/nsis/multiUser.nsh';
+    const source = readFileSync(templatePath, 'utf8');
+    const result = patchMultiUserNsh(source);
+    expect(result.text).toContain(SAFE_MARKER);
+    expect(result.text).not.toContain(UNSAFE_MARKER);
+    expect(result.text).not.toContain('System::Store S');
+    expect(result.status === 'patched' || result.status === 'already-safe').toBe(true);
+    const dryRun = JSON.parse(
+      execFileSync(process.execPath, ['scripts/apply-nsis-multiuser-patch.mjs', '--dry-run'], { encoding: 'utf8' })
+    );
+    expect(dryRun.wouldPatch || dryRun.alreadySafe).toBe(true);
   });
   it('uses a Windows-safe renderer URL and a single sandboxed app instance', () => {
     const source = readFileSync('electron/main.ts', 'utf8');

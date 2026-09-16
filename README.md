@@ -89,6 +89,8 @@ npm install
 ```bash
 npm run dev
 ```
+
+Electron main/preload는 시작 전에 자동으로 컴파일됩니다. 해당 TypeScript 파일을 변경하면 컴파일 성공 후 앱을 재시작합니다. 편집 중인 문서가 있으면 기존 저장/버리기/취소 창이 먼저 표시되며, 취소하면 현재 앱을 계속 사용할 수 있습니다. 컴파일 오류가 있는 동안에는 마지막으로 성공한 앱을 유지합니다. Vite는 5173번 포트를 사용하며 이미 사용 중이면 다른 포트로 우회하지 않고 종료합니다.
 ### 단위 및 E2E 테스트 실행
 ```bash
 # 단위 테스트
@@ -96,12 +98,28 @@ npm run test:unit
 
 # E2E 렌더러 테스트
 npm run test:e2e:renderer
+
+# 실제 Electron의 열기·편집·저장 및 대표 샘플 검사 (Windows 데스크톱 세션)
+npm run test:e2e:electron
+
+# 별도 제공된 승인 현장 샘플 4개를 반드시 검사할 때
+npm run test:local-samples
 ```
+
+E2E 실행 전에는 `npm run build`가 필요합니다. 기본 테스트는 저장소에 포함된 합성 샘플 4종(상대 자산, 병합 표, 다국어, 동적 표/SVG 차트)을 항상 검사합니다. 실제 현장 자료는 포함하지 않으며, `test:local-samples`는 `HTML_reference/`가 없으면 실패합니다. 렌더러 성능 검사는 preview 준비·이미지 로드·개체 선택을 확인한 시간의 3회 중앙값과 실제 편집, 900/1024/1280px의 캔버스 폭 맞춤을 검사합니다. Electron E2E는 파일 선택창의 반환 경로만 테스트 파일로 대체하고 실제 파일 I/O를 수행합니다.
+
+Fit은 작은 창에서도 캔버스 폭에 맞게 50% 아래로 축소됩니다. Properties의 Size & Position은 접어서 표시하고, 개체를 바꾸면 패널 상단으로 이동합니다. 텍스트 입력 중에는 적용 전 변경을 표시하며 `Apply Text` 또는 `Ctrl+Enter`로 반영할 수 있습니다. 상대 이미지의 섹션 썸네일은 깨진 이미지 대신 이름이 있는 자리표시자를 표시하며, 실제 이미지는 본문에서 확인합니다.
+
+인라인 텍스트 편집을 Escape로 취소하면 원래 강조·링크와 DOM을 복원합니다. 더블클릭/F2 진입, 취소, 적용, Undo는 렌더러 E2E에 포함됩니다. 개선 내역과 실제 검증 범위는 [2026-09-12 점검·개선 결과](QA_IMPROVEMENTS_2026-09-12.md)에 기록했습니다.
+
+`node tests/e2e/electron-composition.cjs`는 Chromium 입력 프로토콜을 통해 한글 조합 중 Enter 보호와 조합 완료·Undo/Redo·저장·재열기를 검사합니다. 실제 Windows IME와 OS 파일 선택창 검증은 별도입니다. `HTMLPOINT_E2E_EXE`를 지정하면 기존 패키지 실행 파일을 대상으로 검사할 수 있습니다.
 
 ### Windows 배포판 패키징
 ```bash
 npm run package
 ```
+
+전체 릴리스 검증은 `npm run verify:release`를 사용합니다. **빌드 → 단위 테스트 → 렌더러 E2E → Electron E2E → 검사한 결과 패키징 → Windows NSIS 무인 설치/실행/제거** 순서로 실행합니다. `npm run package:built`는 이미 빌드·검사한 결과를 다시 빌드하지 않고 패키징할 때만 사용합니다. 패키징 전에 electron-builder 25 NSIS 템플릿의 사용자별 설치 경로 복사를 안전하게 고칩니다(`System.dll` `0xc0000005` / QA-07). 이 PC에서 코드 서명 도구가 실패하면 로컬 검증용으로 `--config.win.signAndEditExecutable=false`를 사용할 수 있으며, 그 경우에도 `npm run verify:nsis -- --installer <Setup.exe>`로 무인 설치를 확인합니다.
 빌드가 완료되면 `release/` 폴더에 설치판과 포터블판이 함께 생성됩니다.
 
 ```text

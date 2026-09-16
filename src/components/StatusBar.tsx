@@ -48,14 +48,14 @@ export function StatusBar({
           type="button"
           aria-label="Zoom out"
           disabled={!report}
-          onClick={() => onZoomChange(Math.max(50, zoom - 10))}
+          onClick={() => onZoomChange(Math.max(1, zoom - 10))}
         >
           <Minus size={15} />
         </button>
         <input
           type="range"
           aria-label="Preview zoom"
-          min={50}
+          min={1}
           max={140}
           value={zoom}
           disabled={!report}

@@ -17,3 +17,10 @@ release/
 
 # Project-specific exclusions
 HTML_reference/
+
+# Local QA evidence (installers, profiles, screenshots; hundreds of MB)
+artifacts/qa-*/
+artifacts/verification-*/
+
+# Local work backups (git bundle / patch archive)
+improve/

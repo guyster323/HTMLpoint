@@ -1,0 +1,7 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Multilingual fixture</title><style>section{padding:30px}[data-report-lang]:not([data-report-lang="ko"]){display:none}</style></head><body>
+<div><button data-lang="ko">KO</button><button data-lang="en">EN</button><button data-lang="de">DE</button></div>
+<article data-report-lang="ko"><section id="details"><h1>측정 결과</h1><p>정상입니다.</p></section></article>
+<article data-report-lang="en"><section id="details"><h1>Measurement results</h1><p>Normal.</p></section></article>
+<article data-report-lang="de"><section id="details"><h1>Messergebnisse</h1><p>Normal.</p></section></article>
+<script>document.querySelectorAll('[data-lang]').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('[data-report-lang]').forEach(pane=>{pane.style.display=pane.dataset.reportLang===button.dataset.lang?'block':'none';});}));</script>
+</body></html>

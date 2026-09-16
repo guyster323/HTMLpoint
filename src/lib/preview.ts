@@ -453,7 +453,9 @@ export function buildPreviewHtml(
     event.preventDefault();
     event.stopPropagation();
     selectNode(node.id, true, event.ctrlKey || event.metaKey || event.shiftKey);
-    const originalText = element.textContent || '';
+    // Edit clones so Escape can restore both markup and the original child listeners.
+    const originalChildren = Array.from(element.childNodes);
+    element.replaceChildren(...originalChildren.map((child) => child.cloneNode(true)));
     element.dataset.htmlpointInlineEditing = 'true';
     element.classList.add('htmlpoint-inline-editing');
     element.contentEditable = 'plaintext-only';
@@ -477,6 +479,7 @@ export function buildPreviewHtml(
       closed = true;
       const text = element.textContent || '';
       cleanup();
+      element.replaceChildren(...originalChildren);
       postToEditor({
         type: 'htmlpoint-edit-text',
         nodeId: node.id,
@@ -486,11 +489,12 @@ export function buildPreviewHtml(
     const cancel = () => {
       if (closed) return;
       closed = true;
-      element.textContent = originalText;
+      element.replaceChildren(...originalChildren);
       cleanup();
       paintSelections();
     };
     const handleKeyDown = (keyEvent) => {
+      if (keyEvent.isComposing) return;
       if (keyEvent.key === 'Escape') {
         keyEvent.preventDefault();
         cancel();
@@ -2295,6 +2299,7 @@ export function buildPreviewHtml(
         }
       }
     }
+    document.documentElement.dataset.htmlpointPreviewReady = 'true';
   }
   requestAnimationFrame(() => requestAnimationFrame(initializePreview));
 })();
@@ -2368,7 +2373,9 @@ function jsonForInlineScript(value: unknown): string {
     .replace(/\u2029/g, '\\u2029');
 }
 export function buildThumbnailHtml(sectionHtml: string): string {
-  const document = parseHtml(`<!doctype html><html><head><style>
+  const document = parseHtml(`<!doctype html><html><head>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'">
+  <style>
     body { margin: 0; background: #fff; color: #222; font-family: Arial, sans-serif; overflow: hidden; }
     header, section { box-sizing: border-box; width: 100%; min-height: 100%; margin: 0 !important; padding: 12px !important; box-shadow: none !important; border-radius: 0 !important; }
     h1 { font-size: 16px !important; line-height: 1.15 !important; margin: 0 0 8px !important; }
@@ -2377,9 +2384,20 @@ export function buildThumbnailHtml(sectionHtml: string): string {
     table { width: 100% !important; border-collapse: collapse !important; }
     th, td { padding: 2px !important; border: 1px solid #d6dbe2 !important; }
     svg, img, canvas { max-width: 100% !important; height: auto !important; }
+    .htmlpoint-thumbnail-image-placeholder { display: flex !important; align-items: center; justify-content: center; box-sizing: border-box; min-height: 44px; width: 100%; margin: 6px 0; padding: 8px; border: 1px dashed #97afc4; border-radius: 4px; background: #edf4fa; color: #48657c; font-size: 10px; overflow-wrap: anywhere; }
   </style></head><body>${sectionHtml}</body></html>`);
   stripEditorArtifacts(document);
   neutralizeThumbnailAssetRequests(document);
+  document.querySelectorAll<HTMLImageElement>('img:not([src]):not([srcset])').forEach((image) => {
+    const placeholder = document.createElement('span');
+    if (image.id) placeholder.id = image.id;
+    placeholder.className = 'htmlpoint-thumbnail-image-placeholder';
+    placeholder.setAttribute('role', 'img');
+    const label = image.alt.trim() || '이미지';
+    placeholder.setAttribute('aria-label', `${label} · 본문에서 확인`);
+    placeholder.textContent = `▧ ${label}`;
+    image.replaceWith(placeholder);
+  });
   return serializeFullDocument(document);
 }
 function neutralizeThumbnailAssetRequests(document: Document): void {

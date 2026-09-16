@@ -5,6 +5,7 @@ export default defineConfig({
   base: './',
   plugins: [react()],
   server: {
+    watch: { ignored: ['**/artifacts/**', '**/dist-electron/**', '**/release/**'] },
     host: '127.0.0.1',
     strictPort: false
   },

@@ -34,6 +34,7 @@ protocol.registerSchemesAsPrivileged([
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+let devRestartRequested = false;
 const MAX_HTML_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
@@ -801,6 +802,17 @@ if (!hasSingleInstanceLock) {
     installIpcHandlers();
     await createWindow();
 
+    if (isDev && process.send) {
+      process.on('message', (message: unknown) => {
+        if (!message || typeof message !== 'object' ||
+            (message as { type?: string }).type !== 'htmlpoint:dev-restart') return;
+        devRestartRequested = true;
+        // close() goes through the same dirty-document guard as the window close button.
+        for (const window of BrowserWindow.getAllWindows()) window.close();
+      });
+      process.send({ type: 'htmlpoint:dev-ready' });
+    }
+
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         void createWindow();
@@ -818,7 +830,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
+    if (process.platform !== 'darwin' || devRestartRequested) {
       app.quit();
     }
   });

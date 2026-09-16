@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useState } from 'react';
+import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { BarChart3, Image as ImageIcon, List, Palette, Table2, Type } from 'lucide-react';
 import { parseChartCsvRows, serializeChartCsvRows } from '../lib/chartCsv';
 import { resizeWithAspectLock } from '../lib/imageSizing';
@@ -99,6 +99,10 @@ export function PropertiesPanel({
   onChartData,
   onObjectLayout = () => undefined
 }: PropertiesPanelProps): JSX.Element {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [report?.id, selectedSectionId, selectedNodeId]);
   const section = report?.sections.find((candidate) => candidate.id === selectedSectionId);
   const selectedNodes = (section?.editableNodes ?? []).filter((candidate) =>
     selectedNodeIds.includes(candidate.id)
@@ -131,7 +135,7 @@ export function PropertiesPanel({
         <span>{section?.kind || 'Section'}</span>
       </div>
       <PropertyKind node={inspectableNode} mixed={!sameKindSelection && selectedNodes.length > 1} />
-      <div className="property-body">
+      <div className="property-body" ref={bodyRef}>
         {section ? (
           <>
             <ObjectPicker
@@ -141,12 +145,15 @@ export function PropertiesPanel({
               onNodeSelect={onNodeSelect}
             />
             {selectedNode && selectedNodeIds.length === 1 && layoutSelectionCount === 1 && selectedLayoutMetrics && (
-              <LayoutInspector
-                key={`${selectedNode.id}:${selectedLayoutMetrics.x}:${selectedLayoutMetrics.y}:${selectedLayoutMetrics.width}:${selectedLayoutMetrics.height}`}
-                node={selectedNode}
-                metrics={selectedLayoutMetrics}
-                onApply={onObjectLayout}
-              />
+              <details className="layout-group" key={selectedNode.id}>
+                <summary>Size &amp; Position</summary>
+                <LayoutInspector
+                  key={`${selectedNode.id}:${selectedLayoutMetrics.x}:${selectedLayoutMetrics.y}:${selectedLayoutMetrics.width}:${selectedLayoutMetrics.height}`}
+                  node={selectedNode}
+                  metrics={selectedLayoutMetrics}
+                  onApply={onObjectLayout}
+                />
+              </details>
             )}
             {!sameKindSelection && selectedNodes.length > 1 && (
               <div className="multi-select-note">
@@ -559,11 +566,21 @@ function TextInspector({
       <label className="field">
         <span>{activeLanguage.toUpperCase()} text</span>
         <textarea
+          aria-label={`${activeLanguage.toUpperCase()} text`}
           value={value}
           onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              onTextChange(node.id, value, activeLanguage);
+            }
+          }}
           rows={getAutoTextareaRows(value)}
         />
       </label>
+      {value !== initialText && (
+        <p className="draft-note" role="status">적용 전 변경 · Apply Text 또는 Ctrl+Enter로 반영하세요.</p>
+      )}
       <button type="button" className="blue-button" onClick={() => onTextChange(node.id, value, activeLanguage)}>
         Apply Text
       </button>

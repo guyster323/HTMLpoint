@@ -20,13 +20,21 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run build
       - run: npm run test:unit
       - run: npx playwright install chromium
       - run: npm run test:e2e:renderer
-      - run: npm run package
+      - run: npm run test:e2e:electron
+      - run: npm run package:built
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      - name: Silent-install NSIS smoke
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem release/HTMLpoint-Setup-*-x64.exe | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'NSIS installer was not produced' }
+          node scripts/verify-windows-nsis.mjs --installer $installer --install-dir "$env:RUNNER_TEMP\htmlpoint-nsis-smoke" --artifact-dir "$PWD\release\nsis-smoke"
       - name: Create SHA-256 checksums
         shell: pwsh
         run: |
