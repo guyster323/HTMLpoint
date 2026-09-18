@@ -6,6 +6,7 @@ import { App } from '../src/App';
 import * as editingModule from '../src/lib/editing';
 import {
   applyTextEffect,
+  applyTextRangeFormatting,
   editTextNode,
   updateChartPresentation
 } from '../src/lib/editing';
@@ -203,6 +204,22 @@ describe('data preservation', () => {
     expect(outcome.report.dirty).toBe(false);
     expect(outcome.report.operations).toHaveLength(0);
     expect(outcome.validation?.code).toBe('rich-text-child-token-mismatch');
+  });
+
+  it('applies partial text formatting without flattening existing inline markup', () => {
+    let report = parseReportHtml(`<!doctype html><html><body><section>
+      <p>한글 <a href="#target">링크</a> 뒤 텍스트</p>
+    </section></body></html>`);
+    const section = report.sections[0];
+    const paragraph = section.editableNodes.find((node) => node.tagName === 'p')!;
+    report = applyTextRangeFormatting(report, section.id, paragraph.id, 0, 2, {
+      bold: true,
+      color: '#c1121f'
+    });
+    const saved = serializeReportHtml(report).html;
+    expect(saved).toContain('font-weight: 700; color: rgb(193, 18, 31);');
+    expect(saved).toContain('href="#target"');
+    expect(saved).toContain('링크');
   });
 
   it('surfaces the rich-text validation message from a Properties text apply without creating history', async () => {

@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { SampleFile } from '../lib/fileServices';
+import type { DiagramLayerCommand } from '../lib/editing';
 import { tooltipProps } from '../lib/tooltips';
 import {
   EditableNodeKind,
@@ -40,6 +41,7 @@ interface RibbonProps {
   selectedKind?: EditableNodeKind;
   selectedTextStyle?: TextStyleSnapshot;
   selectedObjectCount?: number;
+  selectedDiagramObjectCount?: number;
   canUndo: boolean;
   canRedo: boolean;
   onTabChange: (tab: string) => void;
@@ -47,11 +49,18 @@ interface RibbonProps {
   onSampleOpen?: (sample: SampleFile) => void;
   onSave?: () => void;
   onSaveAs: () => void;
+  onExportPptx?: () => void;
+  onExportDeploymentHtml?: () => void;
+  onExportPdf?: () => void;
+  onCancelExport?: () => void;
+  exportBusy?: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onTextStyle: (settings: TextStyleSettings) => void;
   onInsertTable: () => void;
   onInsertImage: () => void;
+  onInsertShape?: (shapeType: 'rect' | 'ellipse') => void;
+  onInsertConnector?: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onHideToggle: () => void;
@@ -64,8 +73,14 @@ interface RibbonProps {
   onImageReplace: () => void;
   onImageCrop: () => void;
   onReviewSummary: () => void;
+  onReviewQuality?: () => void;
   onLanguageChange: (language: string) => void;
   onArrange?: (command: ObjectLayoutCommand) => void;
+  onDiagramDuplicate?: () => void;
+  onDiagramDelete?: () => void;
+  onDiagramLayer?: (command: DiagramLayerCommand) => void;
+  onDiagramGroup?: () => void;
+  onDiagramUngroup?: () => void;
 }
 const tabs = ['Home', 'Insert', 'Arrange', 'Table', 'Image', 'Review', 'Export'];
 const RIBBON_PANEL_ID = 'ribbon-panel';
@@ -107,17 +122,25 @@ export function Ribbon({
   selectedKind,
   selectedTextStyle,
   selectedObjectCount = 0,
+  selectedDiagramObjectCount = 0,
   canUndo,
   canRedo,
   onTabChange,
   onOpen,
   onSave,
   onSaveAs,
+  onExportPptx,
+  onExportDeploymentHtml,
+  onExportPdf,
+  onCancelExport,
+  exportBusy = false,
   onUndo,
   onRedo,
   onTextStyle,
   onInsertTable,
   onInsertImage,
+  onInsertShape,
+  onInsertConnector,
   onDuplicate,
   onDelete,
   onHideToggle,
@@ -130,8 +153,14 @@ export function Ribbon({
   onImageReplace,
   onImageCrop,
   onReviewSummary,
+  onReviewQuality,
   onLanguageChange,
-  onArrange
+  onArrange,
+  onDiagramDuplicate,
+  onDiagramDelete,
+  onDiagramLayer,
+  onDiagramGroup,
+  onDiagramUngroup
 }: RibbonProps): JSX.Element {
   const isTable = selectedKind === 'table';
   const isImage = selectedKind === 'image';
@@ -279,6 +308,15 @@ export function Ribbon({
               <ImageIcon />
               <span>Image</span>
             </button>
+            <button className="compact-tool" type="button" onClick={() => onInsertShape?.('rect')} disabled={!report || !onInsertShape} {...tooltipProps('Insert rectangle')}>
+              Rectangle
+            </button>
+            <button className="compact-tool" type="button" onClick={() => onInsertShape?.('ellipse')} disabled={!report || !onInsertShape} {...tooltipProps('Insert ellipse')}>
+              Ellipse
+            </button>
+            <button className="compact-tool" type="button" onClick={onInsertConnector} disabled={!report || !onInsertConnector || selectedObjectCount !== 2} {...tooltipProps('Connect two selected diagram objects')}>
+              Connector
+            </button>
           </RibbonGroup>
         )}
         {activeTab === 'Arrange' && (
@@ -338,6 +376,80 @@ export function Ribbon({
                 Reset Position
               </button>
             </RibbonGroup>
+            <RibbonGroup title="Diagram">
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedDiagramObjectCount < 1 || !onDiagramDuplicate}
+                onClick={onDiagramDuplicate}
+                {...tooltipProps('Duplicate selected diagram objects')}
+              >
+                Duplicate
+              </button>
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedDiagramObjectCount < 1 || !onDiagramDelete}
+                onClick={onDiagramDelete}
+                {...tooltipProps('Delete selected diagram objects')}
+              >
+                Delete
+              </button>
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedDiagramObjectCount !== 1 || !onDiagramLayer}
+                onClick={() => onDiagramLayer?.('front')}
+                {...tooltipProps('Bring selected object to front')}
+              >
+                Front
+              </button>
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedDiagramObjectCount !== 1 || !onDiagramLayer}
+                onClick={() => onDiagramLayer?.('back')}
+                {...tooltipProps('Send selected object to back')}
+              >
+                Back
+              </button>
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedDiagramObjectCount !== 1 || !onDiagramLayer}
+                onClick={() => onDiagramLayer?.('forward')}
+                {...tooltipProps('Bring selected object forward')}
+              >
+                Forward
+              </button>
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedDiagramObjectCount !== 1 || !onDiagramLayer}
+                onClick={() => onDiagramLayer?.('backward')}
+                {...tooltipProps('Send selected object backward')}
+              >
+                Backward
+              </button>
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedDiagramObjectCount < 2 || !onDiagramGroup}
+                onClick={onDiagramGroup}
+                {...tooltipProps('Group selected diagram objects')}
+              >
+                Group
+              </button>
+              <button
+                className="compact-tool arrange-tool"
+                type="button"
+                disabled={selectedDiagramObjectCount !== 1 || !onDiagramUngroup}
+                onClick={onDiagramUngroup}
+                {...tooltipProps('Ungroup selected diagram object')}
+              >
+                Ungroup
+              </button>
+            </RibbonGroup>
           </>
         )}
         {activeTab === 'Table' && (
@@ -378,6 +490,10 @@ export function Ribbon({
                 <Search />
                 <span>Summary</span>
               </button>
+              <button className="large-tool" type="button" onClick={onReviewQuality} disabled={!report || !onReviewQuality} {...tooltipProps('Document quality')}>
+                <Search />
+                <span>Quality</span>
+              </button>
             </RibbonGroup>
             <RibbonGroup title="Changes">
               <button className="compact-tool" type="button" onClick={onUndo} disabled={!canUndo} {...tooltipProps('Undo')}>Undo</button>
@@ -386,12 +502,31 @@ export function Ribbon({
           </>
         )}
         {activeTab === 'Export' && (
-          <RibbonGroup title="Export">
-            <button className="large-tool" type="button" onClick={onSaveAs} disabled={!report} {...tooltipProps('Save As HTML')}>
+          <>
+            <RibbonGroup title="Export">
+            <button className="large-tool" type="button" onClick={onSaveAs} disabled={!report || exportBusy} {...tooltipProps('Save As HTML')}>
               <Download />
               <span>HTML</span>
             </button>
-          </RibbonGroup>
+            <button className="large-tool" type="button" onClick={onExportPptx} disabled={!report || !onExportPptx || exportBusy} {...tooltipProps('Export PowerPoint')}>
+              <Download />
+              <span>{exportBusy ? 'PPTX…' : 'PPTX'}</span>
+            </button>
+            <button className="large-tool" type="button" onClick={onExportDeploymentHtml} disabled={!report || !onExportDeploymentHtml || exportBusy} {...tooltipProps('Export deployment HTML')}>
+              <Download />
+              <span>Deploy HTML</span>
+            </button>
+            <button className="large-tool" type="button" onClick={onExportPdf} disabled={!report || !onExportPdf || exportBusy} {...tooltipProps('Export PDF')}>
+              <Download />
+              <span>PDF</span>
+            </button>
+            {exportBusy && onCancelExport && (
+              <button className="compact-tool" type="button" onClick={onCancelExport} {...tooltipProps('Cancel export')}>
+                Cancel
+              </button>
+            )}
+            </RibbonGroup>
+          </>
         )}
       </div>
     </header>

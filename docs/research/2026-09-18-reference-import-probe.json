@@ -1,0 +1,62 @@
+{
+  "date": "2026-09-18",
+  "htmlpointCommit": "25d349172eaf5d6c5efe5e76e93942c75df5a6de",
+  "reference": {
+    "repository": "https://github.com/tonywjs/html-diagram",
+    "commit": "ad28607300e19a76dacd7b9b5957a6b0e6cf0a9c"
+  },
+  "method": {
+    "loader": "Vite createServer with middlewareMode, ssrLoadModule('/src/lib/htmlParser.ts')",
+    "parser": "parseReportHtml(html, {fileName})",
+    "dom": "jsdom, external HTML scripts not executed",
+    "globals": ["window", "document", "DOMParser", "Node", "NodeFilter", "Element", "HTMLElement", "SVGElement", "HTMLTableElement", "HTMLTableSectionElement", "HTMLImageElement"],
+    "scope": "Parser compatibility only; not a browser visual or interaction test",
+    "initialHarnessFailure": "NodeFilter missing; supplied jsdom NodeFilter and reran successfully"
+  },
+  "results": [
+    {
+      "input": "examples/demo.html",
+      "figCanvases": 1,
+      "figNodes": 11,
+      "figEdges": 4,
+      "htmlpointSections": 0,
+      "htmlpointEditableNodes": 0
+    },
+    {
+      "input": "examples/poster.html",
+      "figCanvases": 2,
+      "figNodes": 54,
+      "figEdges": 20,
+      "htmlpointSections": 0,
+      "htmlpointEditableNodes": 0
+    },
+    {
+      "input": "examples/drug-pipeline.html",
+      "figCanvases": 1,
+      "figNodes": 11,
+      "figEdges": 7,
+      "htmlpointSections": 0,
+      "htmlpointEditableNodes": 0
+    },
+    {
+      "input": "examples/poster-static.html",
+      "figCanvases": 2,
+      "figNodes": 54,
+      "figEdges": 20,
+      "htmlpointSections": 0,
+      "htmlpointEditableNodes": 0
+    },
+    {
+      "input": "generic-slide",
+      "html": "<html><body><div class=\"slide-portrait\"><h1>Title</h1><p>Content</p></div></body></html>",
+      "htmlpointSections": 0,
+      "htmlpointEditableNodes": 0
+    },
+    {
+      "input": "existing-section",
+      "html": "<html><body><section><h1>Title</h1><p>Content</p></section></body></html>",
+      "htmlpointSections": 1,
+      "htmlpointEditableNodes": 2
+    }
+  ]
+}

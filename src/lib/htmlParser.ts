@@ -2,11 +2,15 @@ import {
   AssetRef,
   ChartPresentationSettings,
   EditableNode,
+  DiagramObjectSnapshot,
+  ImportAdapterKind,
+  ImportCandidate,
   ParseOptions,
   ReportDocument,
   ReportLanguage,
   ReportSection,
   ReportSectionKind,
+  SourceRef,
   TableCellSnapshot,
   TextEffectSettings,
   TranslationEntry
@@ -17,7 +21,12 @@ import { serializeFullDocument, stripEditorArtifacts } from './editorArtifacts';
 import { findImageFrame, TABLE_LAYOUT_TARGET_SELECTOR } from './layoutTargets';
 export { snapshotChart } from './chartAdapters';
 
-const SLIDE_SELECTOR = 'header, section';
+const SEMANTIC_SLIDE_SELECTOR = 'header, section';
+const EXPLICIT_SLIDE_SELECTOR =
+  '[data-htmlpoint-slide], [data-slide], .slide-portrait, .slide';
+const FIG_CANVAS_SELECTOR = '.fig-canvas, [data-fig-canvas]';
+const IMPORT_CANDIDATE_SELECTOR =
+  '[data-htmlpoint-import-candidate], main > article, main > div, body > article, body > div';
 const TEXT_SELECTOR = [
   'h1',
   'h2',
@@ -101,10 +110,90 @@ export function parseHtml(html: string): Document {
 }
 
 export function getSlideElements(document: Document): HTMLElement[] {
-  return Array.from(document.body.querySelectorAll<HTMLElement>(SLIDE_SELECTOR)).filter((element) => {
-    const nestedSlideParent = element.parentElement?.closest(SLIDE_SELECTOR);
-    return !nestedSlideParent;
-  });
+  return getSlideDescriptors(document).map((descriptor) => descriptor.element);
+}
+
+export interface SlideDescriptor {
+  element: HTMLElement;
+  adapter: Exclude<ImportAdapterKind, 'candidate'>;
+}
+
+/**
+ * Selects one page root per visual container. Explicit slide and fig-canvas
+ * markers win over semantic descendants, so a slide containing a section or
+ * a canvas is never imported twice.
+ */
+export function getSlideDescriptors(document: Document): SlideDescriptor[] {
+  const candidates: Array<SlideDescriptor & { priority: number; order: number }> = [];
+  const add = (
+    selector: string,
+    adapter: Exclude<ImportAdapterKind, 'candidate'>,
+    priority: number
+  ) => {
+    document.body.querySelectorAll<HTMLElement>(selector).forEach((element) => {
+      candidates.push({ element, adapter, priority, order: elementOrder(document.body, element) });
+    });
+  };
+
+  add(SEMANTIC_SLIDE_SELECTOR, 'semantic', 10);
+  add(FIG_CANVAS_SELECTOR, 'fig-canvas', 20);
+  add(EXPLICIT_SLIDE_SELECTOR, 'slide', 30);
+
+  const selected: Array<SlideDescriptor & { priority: number; order: number }> = [];
+  for (const candidate of candidates.sort((left, right) => right.priority - left.priority || left.order - right.order)) {
+    const higherPriorityAncestor = candidates.some(
+      (other) =>
+        other !== candidate &&
+        other.priority > candidate.priority &&
+        other.element.contains(candidate.element)
+    );
+    if (higherPriorityAncestor) {
+      continue;
+    }
+    const containing = selected.find((parent) => parent.element.contains(candidate.element));
+    if (containing && containing.priority >= candidate.priority) {
+      continue;
+    }
+    const higherPrioritySelectedDescendant = selected.some(
+      (child) =>
+        child.priority > candidate.priority && candidate.element.contains(child.element)
+    );
+    if (higherPrioritySelectedDescendant) {
+      continue;
+    }
+    const descendants = selected.filter(
+      (child) => candidate.element.contains(child.element) && candidate.priority >= child.priority
+    );
+    descendants.forEach((child) => selected.splice(selected.indexOf(child), 1));
+    selected.push(candidate);
+  }
+
+  return selected
+    .sort((left, right) => left.order - right.order)
+    .map(({ element, adapter }) => ({ element, adapter }));
+}
+
+export function findImportCandidates(document: Document): ImportCandidate[] {
+  const descriptors = new Set<HTMLElement>();
+  return Array.from(document.body.querySelectorAll<HTMLElement>(IMPORT_CANDIDATE_SELECTOR))
+    .filter((element) => {
+      if (descriptors.has(element) || element.closest(SEMANTIC_SLIDE_SELECTOR) || element.closest(FIG_CANVAS_SELECTOR)) {
+        return false;
+      }
+      descriptors.add(element);
+      return hasCandidateContent(element);
+    })
+    .slice(0, 20)
+    .map((element, index) => ({
+      id: `candidate-${index + 1}`,
+      adapter: 'candidate' as const,
+      selector: element.hasAttribute('data-htmlpoint-import-candidate')
+        ? '[data-htmlpoint-import-candidate]'
+        : element.tagName.toLowerCase(),
+      label: getCandidateLabel(element, `Candidate ${index + 1}`),
+      domPath: getElementPath(document.body, element),
+      reason: '명시적 slide·section 표식이 없어 편집 범위를 선택해야 합니다.'
+    }));
 }
 
 export function getParentKey(document: Document, parent: Element): string {
@@ -119,10 +208,16 @@ export function parseReportHtml(html: string, options: ParseOptions = {}): Repor
   const activePaneLanguage = document
     .querySelector<HTMLElement>('[data-report-lang].active')
     ?.dataset.reportLang?.trim();
-  const slideElements = getSlideElements(document);
-  const sections = slideElements.map((element, index) =>
-    parseSectionElement(document, element, index, translations)
-  );
+  const slideDescriptors = getSlideDescriptors(document);
+  const selectedCandidate = !slideDescriptors.length && options.selectedCandidatePath
+    ? getElementByPath(document.body, options.selectedCandidatePath)
+    : null;
+  const sections = selectedCandidate instanceof HTMLElement
+    ? [parseSectionElement(document, selectedCandidate, 0, translations, 'candidate')]
+    : slideDescriptors.map((descriptor, index) =>
+        parseSectionElement(document, descriptor.element, index, translations, descriptor.adapter)
+      );
+  const importCandidates = sections.length ? undefined : findImportCandidates(document);
 
   return {
     id: makeDocumentId(),
@@ -139,7 +234,8 @@ export function parseReportHtml(html: string, options: ParseOptions = {}): Repor
     operations: [],
     dirty: false,
     createdAt: Date.now(),
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    ...(importCandidates?.length ? { importCandidates } : {})
   };
 }
 
@@ -173,12 +269,14 @@ export function parseSectionElement(
   document: Document,
   element: HTMLElement,
   index: number,
-  translations: TranslationEntry[]
+  translations: TranslationEntry[],
+  adapter: ImportAdapterKind = inferAdapter(element)
 ): ReportSection {
-  const id = `section-${index + 1}`;
+  const id = readStableSectionId(element) ?? `section-${index + 1}`;
+  const domPath = getElementPath(document.body, element);
   const section: ReportSection = {
     id,
-    kind: getSectionKind(element),
+    kind: getSectionKind(element, adapter),
     title: getSectionTitle(element, index),
     sourceId: element.id || undefined,
     languageScope: getSectionLanguageScope(element),
@@ -191,7 +289,13 @@ export function parseSectionElement(
       element.dataset.htmlpointHidden === 'true' ||
       element.style.display === 'none',
     editableNodes: [],
-    changed: false
+    changed: false,
+    sourceRef: {
+      adapter,
+      domPath,
+      htmlId: element.id || undefined,
+      objectId: id
+    }
   };
 
   return parseSectionHtml(section, translations);
@@ -279,9 +383,18 @@ export function collectEditableNodes(
 ): EditableNode[] {
   const nodes: EditableNode[] = [];
   const seen = new Set<Element>();
+  const diagramElements = Array.from(
+    sectionElement.querySelectorAll<Element>(
+      '.fig-node, [data-fig-node], .htmlpoint-shape, [data-htmlpoint-shape], .fig-edge, [data-fig-edge], .htmlpoint-connector, [data-htmlpoint-connector]'
+    )
+  );
 
   sectionElement.querySelectorAll<HTMLElement>(TEXT_SELECTOR).forEach((element) => {
-    if (isInsideSvg(element) || !isMeaningfulTextElement(element)) {
+    if (
+      isInsideSvg(element) ||
+      isInsideDiagramObject(element) ||
+      !isMeaningfulTextElement(element)
+    ) {
       return;
     }
     seen.add(element);
@@ -294,7 +407,7 @@ export function collectEditableNodes(
     }
     const path = getElementPath(sectionElement, element);
     nodes.push({
-      id: makeNodeId(sectionId, path, 'table'),
+      id: nodeIdForElement(sectionId, path, 'table', element),
       sectionId,
       kind: 'table',
       tagName: element.tagName.toLowerCase(),
@@ -302,7 +415,8 @@ export function collectEditableNodes(
       path,
       text: element.textContent?.trim() ?? '',
       html: element.innerHTML,
-      table: snapshotTable(element as HTMLTableElement)
+      table: snapshotTable(element as HTMLTableElement),
+      sourceRef: makeNodeSourceRef(sectionElement, element, 'semantic')
     });
   });
 
@@ -313,7 +427,7 @@ export function collectEditableNodes(
     const path = getElementPath(sectionElement, element);
     const frame = findImageFrame(element, sectionElement);
     nodes.push({
-      id: makeNodeId(sectionId, path, 'image'),
+      id: nodeIdForElement(sectionId, path, 'image', element),
       sectionId,
       kind: 'image',
       tagName: 'img',
@@ -331,16 +445,20 @@ export function collectEditableNodes(
         frameHeight: frame?.getAttribute('height') ?? parseStyleSize(frame?.getAttribute('style') ?? null, 'height'),
         frameStyle: frame?.getAttribute('style') ?? undefined,
         hasFrame: Boolean(frame)
-      }
+      },
+      sourceRef: makeNodeSourceRef(sectionElement, element, 'semantic')
     });
   });
 
   sectionElement.querySelectorAll<HTMLElement>('svg, canvas').forEach((element) => {
-    if (element.dataset.htmlpointImageArrow === 'true') {
+    if (
+      element.dataset.htmlpointImageArrow === 'true' ||
+      isStaticDiagramArtwork(element, sectionElement)
+    ) {
       return;
     }
     const path = getElementPath(sectionElement, element);
-    const id = makeNodeId(sectionId, path, 'chart');
+    const id = nodeIdForElement(sectionId, path, 'chart', element);
     nodes.push({
       id,
       sectionId,
@@ -351,7 +469,33 @@ export function collectEditableNodes(
       text: element.textContent?.trim() ?? '',
       html: element.outerHTML,
       chart: snapshotChart(element),
-      chartPresentation: snapshotChartPresentation(element, id)
+      chartPresentation: snapshotChartPresentation(element, id),
+      sourceRef: makeNodeSourceRef(sectionElement, element, 'semantic')
+    });
+  });
+
+  diagramElements.forEach((element) => {
+    if (seen.has(element)) {
+      return;
+    }
+    seen.add(element);
+    const path = getElementPath(sectionElement, element);
+    const role = element.matches(
+      '.fig-edge, [data-fig-edge], .htmlpoint-connector, [data-htmlpoint-connector]'
+    ) ? 'edge' : 'node';
+    const objectId = readDiagramObjectId(element, `${sectionId}:${role}:${pathKey(path)}`);
+    const diagram = snapshotDiagramObject(element, role, objectId);
+    nodes.push({
+      id: makeDiagramNodeId(sectionId, role, objectId),
+      sectionId,
+      kind: role === 'edge' ? 'connector' : 'shape',
+      tagName: element.tagName.toLowerCase(),
+      label: getElementLabel(element, role === 'edge' ? 'Connector' : 'Shape'),
+      path,
+      text: element.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+      html: element instanceof HTMLElement ? element.outerHTML : element.outerHTML,
+      sourceRef: makeNodeSourceRef(sectionElement, element, 'fig-canvas', objectId),
+      diagram
     });
   });
   return assignLayoutTargetPaths(sectionElement, nodes);
@@ -371,6 +515,172 @@ const BLOCK_LAYOUT_TAGS = new Set([
   'summary',
   'blockquote'
 ]);
+
+function elementOrder(root: Element, target: Element): number {
+  return Array.from(root.querySelectorAll('*')).indexOf(target);
+}
+
+function hasCandidateContent(element: HTMLElement): boolean {
+  return Boolean(
+    element.hasAttribute('data-htmlpoint-import-candidate') ||
+      element.querySelector('h1,h2,h3,h4,h5,h6,p,table,img,svg,canvas,.fig-node')
+  );
+}
+
+function inferAdapter(element: HTMLElement): Exclude<ImportAdapterKind, 'candidate'> {
+  if (element.matches(FIG_CANVAS_SELECTOR)) {
+    return 'fig-canvas';
+  }
+  if (element.matches(EXPLICIT_SLIDE_SELECTOR)) {
+    return 'slide';
+  }
+  return 'semantic';
+}
+
+function readStableSectionId(element: HTMLElement): string | undefined {
+  const value = element.dataset.htmlpointSourceSectionId?.trim();
+  return value || undefined;
+}
+
+function nodeIdForElement(
+  sectionId: string,
+  path: number[],
+  kind: string,
+  element: Element
+): string {
+  const stableId = element.getAttribute('data-htmlpoint-object-id')?.trim();
+  return stableId || makeNodeId(sectionId, path, kind);
+}
+
+function makeNodeSourceRef(
+  sectionElement: HTMLElement,
+  element: Element,
+  adapter: ImportAdapterKind,
+  objectId?: string
+): SourceRef {
+  return {
+    adapter,
+    domPath: getElementPath(sectionElement, element),
+    htmlId: element.id || undefined,
+    objectId:
+      objectId ?? element.getAttribute('data-htmlpoint-object-id')?.trim() ?? undefined
+  };
+}
+
+function pathKey(path: number[]): string {
+  return path.length ? path.join('.') : 'root';
+}
+
+function isInsideDiagramObject(element: Element): boolean {
+  return Boolean(
+    element.closest(
+      '.fig-node, [data-fig-node], .htmlpoint-shape, [data-htmlpoint-shape], .fig-edge, [data-fig-edge], .htmlpoint-connector, [data-htmlpoint-connector]'
+    )
+  );
+}
+
+function isStaticDiagramArtwork(element: Element, sectionElement: HTMLElement): boolean {
+  if (!element.closest(FIG_CANVAS_SELECTOR)) {
+    return false;
+  }
+  const hasDeclaredObjects = Boolean(
+    sectionElement.querySelector(
+      '.fig-node, [data-fig-node], .htmlpoint-shape, [data-htmlpoint-shape], .fig-edge, [data-fig-edge], .htmlpoint-connector, [data-htmlpoint-connector]'
+    )
+  );
+  if (!hasDeclaredObjects) {
+    return false;
+  }
+  return !element.matches('[data-htmlpoint-chart], .chart, .graph, [role="img"][aria-label]');
+}
+
+function readDiagramObjectId(element: Element, fallback: string): string {
+  return (
+    element.getAttribute('data-htmlpoint-object-id')?.trim() ||
+    element.getAttribute('data-object-id')?.trim() ||
+    element.getAttribute('data-node-id')?.trim() ||
+    element.getAttribute('data-edge-id')?.trim() ||
+    element.getAttribute('data-id')?.trim() ||
+    element.id?.trim() ||
+    fallback
+  );
+}
+
+function makeDiagramNodeId(
+  sectionId: string,
+  role: DiagramObjectSnapshot['role'],
+  objectId: string
+): string {
+  return `${sectionId}:${role === 'edge' ? 'connector' : 'shape'}:${objectId}`;
+}
+
+function readDiagramAttribute(element: Element, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = element.getAttribute(name)?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readNumericAttribute(element: Element, names: string[]): number | undefined {
+  const value = readDiagramAttribute(element, names);
+  if (value === undefined) {
+    return undefined;
+  }
+  const number = Number(value.replace(/px$/i, ''));
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function snapshotDiagramObject(
+  element: Element,
+  role: DiagramObjectSnapshot['role'],
+  objectId: string
+): DiagramObjectSnapshot {
+  if (role === 'edge') {
+    return {
+      role,
+      objectId,
+      fromObjectId: readDiagramAttribute(element, [
+        'data-from',
+        'data-from-id',
+        'data-source',
+        'data-start'
+      ]),
+      toObjectId: readDiagramAttribute(element, [
+        'data-to',
+        'data-to-id',
+        'data-target',
+        'data-end'
+      ]),
+      startAnchor: readDiagramAttribute(element, ['data-start-anchor', 'data-from-anchor']),
+      endAnchor: readDiagramAttribute(element, ['data-end-anchor', 'data-to-anchor'])
+    };
+  }
+  return {
+    role,
+    objectId,
+    x: readNumericAttribute(element, ['data-x', 'x']),
+    y: readNumericAttribute(element, ['data-y', 'y']),
+    width: readNumericAttribute(element, ['data-width', 'width']),
+    height: readNumericAttribute(element, ['data-height', 'height'])
+  };
+}
+
+function getElementLabel(element: Element, fallback: string): string {
+  const label =
+    element.getAttribute('aria-label') ||
+    element.getAttribute('data-label') ||
+    element.textContent?.replace(/\s+/g, ' ').trim();
+  return label ? label.slice(0, 80) : fallback;
+}
+
+function getCandidateLabel(element: HTMLElement, fallback: string): string {
+  const heading = element.querySelector('h1,h2,h3,h4,h5,h6');
+  const label = heading?.textContent?.replace(/\s+/g, ' ').trim();
+  return label ? label.slice(0, 80) : getNodeLabel(element, fallback);
+}
 
 function assignLayoutTargetPaths(
   sectionElement: HTMLElement,
@@ -603,7 +913,7 @@ function createTextNode(
   const text = element.textContent?.trim() ?? '';
 
   return {
-    id: makeNodeId(sectionId, path, 'text'),
+    id: nodeIdForElement(sectionId, path, 'text', element),
     sectionId,
     kind: element.matches('ul,ol,li') ? 'list' : 'text',
     tagName: element.tagName.toLowerCase(),
@@ -614,6 +924,7 @@ function createTextNode(
     translationSelector: translation?.selector,
     textStyle: snapshotTextStyle(element),
     textEffect: snapshotTextEffect(element),
+    sourceRef: makeNodeSourceRef(sectionElement, element, 'semantic'),
     languageTexts: translation
       ? {
           ko: translation.koHtml,
@@ -725,7 +1036,19 @@ function snapshotTextStyle(element: HTMLElement): {
     color: style.color || undefined
   };
 }
-function getSectionKind(element: HTMLElement): ReportSectionKind {
+function getSectionKind(
+  element: HTMLElement,
+  adapter: ImportAdapterKind = inferAdapter(element)
+): ReportSectionKind {
+  if (adapter === 'fig-canvas') {
+    return 'canvas';
+  }
+  if (adapter === 'slide' && !element.matches('header, section')) {
+    return 'slide';
+  }
+  if (adapter === 'candidate') {
+    return 'generic';
+  }
   if (element.tagName.toLowerCase() === 'header') {
     return 'header';
   }

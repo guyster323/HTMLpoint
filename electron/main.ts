@@ -53,6 +53,15 @@ interface SaveHtmlPayload {
   sourcePath?: string;
   warnings?: string[];
 }
+interface SavePptxPayload {
+  defaultPath?: string;
+  data: Uint8Array;
+}
+interface SavePdfPayload {
+  defaultPath?: string;
+  html: string;
+  sourcePath?: string;
+}
 const confirmedCloseWindows = new WeakSet<BrowserWindow>();
 const externalLinkPromptWindows = new WeakSet<BrowserWindow>();
 const externalLinkLastPromptAt = new WeakMap<BrowserWindow, number>();
@@ -743,6 +752,98 @@ function installIpcHandlers(): void {
       try { await saveWithAssets(result.filePath, payload.html, payload.sourcePath); }
       catch (error) { throw new Error(`저장 또는 자산 복사 실패: ${errorMessage(error)}`); }
       return { filePath: result.filePath, warnings };
+    }
+  );
+  ipcMain.handle(
+    'htmlpoint:save-pptx',
+    async (
+      _event,
+      payload: SavePptxPayload
+    ): Promise<{ filePath: string } | null> => {
+      if (!payload || !(payload.data instanceof Uint8Array) || payload.data.byteLength === 0) {
+        throw new Error('PPTX 저장 요청이 올바르지 않습니다.');
+      }
+      const result = await dialog.showSaveDialog({
+        title: 'Export PowerPoint',
+        defaultPath: payload.defaultPath ?? 'htmlpoint-export.pptx',
+        filters: [{ name: 'PowerPoint', extensions: ['pptx'] }]
+      });
+      if (result.canceled || !result.filePath) {
+        return null;
+      }
+      const targetPath = result.filePath.toLowerCase().endsWith('.pptx')
+        ? result.filePath
+        : `${result.filePath}.pptx`;
+      const stagingPath = `${targetPath}.htmlpoint-${randomUUID()}.tmp`;
+      try {
+        await writeFile(stagingPath, Buffer.from(payload.data));
+        await rename(stagingPath, targetPath);
+      } catch (error) {
+        await rm(stagingPath, { force: true }).catch(() => undefined);
+        throw new Error(`PPTX 저장 실패: ${errorMessage(error)}`);
+      }
+      return { filePath: targetPath };
+    }
+  );
+  ipcMain.handle(
+    'htmlpoint:save-pdf',
+    async (_event, payload: SavePdfPayload): Promise<{ filePath: string } | null> => {
+      if (!payload || typeof payload.html !== 'string' || !payload.html.trim()) {
+        throw new Error('PDF 저장 요청이 올바르지 않습니다.');
+      }
+      const result = await dialog.showSaveDialog({
+        title: 'Export PDF',
+        defaultPath: payload.defaultPath ?? 'htmlpoint-deployment.pdf',
+        filters: [{ name: 'PDF', extensions: ['pdf'] }]
+      });
+      if (result.canceled || !result.filePath) {
+        return null;
+      }
+      const targetPath = result.filePath.toLowerCase().endsWith('.pdf')
+        ? result.filePath
+        : `${result.filePath}.pdf`;
+      const printWindow = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+          webSecurity: true
+        }
+      });
+      const stagingPath = `${targetPath}.htmlpoint-${randomUUID()}.tmp`;
+      let printHtmlPath: string | undefined;
+      try {
+        let printDirectory = app.getPath('temp');
+        if (payload.sourcePath) {
+          try {
+            const canonicalSource = await validateHtmlPath(payload.sourcePath);
+            printDirectory = path.dirname(canonicalSource);
+          } catch {
+            // A saved report may have moved since it was opened. Keep PDF export usable.
+          }
+        }
+        printHtmlPath = path.join(printDirectory, `.htmlpoint-print-${randomUUID()}.html`);
+        await writeFile(printHtmlPath, payload.html, 'utf8');
+        await printWindow.loadFile(printHtmlPath);
+        const pdf = await printWindow.webContents.printToPDF({
+          printBackground: true,
+          preferCSSPageSize: true
+        });
+        await writeFile(stagingPath, pdf);
+        await rename(stagingPath, targetPath);
+      } catch (error) {
+        await rm(stagingPath, { force: true }).catch(() => undefined);
+        throw new Error(`PDF 저장 실패: ${errorMessage(error)}`);
+      } finally {
+        if (printHtmlPath) {
+          await rm(printHtmlPath, { force: true }).catch(() => undefined);
+        }
+        if (!printWindow.isDestroyed()) {
+          printWindow.destroy();
+        }
+      }
+      return { filePath: targetPath };
     }
   );
   ipcMain.handle(

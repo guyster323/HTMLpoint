@@ -1,5 +1,6 @@
 import { ReportDocument, SaveResult, TranslationEntry } from '../types/htmlpoint';
 import { serializeFullDocument, stripEditorArtifacts } from './editorArtifacts';
+import { getElementByPath } from './domPaths';
 import { getParentKey, getSlideElements, parseHtml } from './htmlParser';
 
 interface SlideGroup {
@@ -41,6 +42,7 @@ export function serializeReportHtml(
         }
         stripEditorArtifacts(sectionDocument);
         cleanEditorAttributes(element);
+        persistStableMetadata(element, section);
         if (section.hidden) {
           element.dataset.htmlpointHidden = 'true';
           element.style.display = 'none';
@@ -88,6 +90,23 @@ function cleanEditorAttributes(element: HTMLElement): void {
     node.removeAttribute('data-htmlpoint-node-id');
   });
   element.removeAttribute('data-htmlpoint-edited');
+}
+
+function persistStableMetadata(
+  element: HTMLElement,
+  section: ReportDocument['sections'][number]
+): void {
+  if (section.sourceRef?.adapter !== 'semantic') {
+    element.dataset.htmlpointSourceSectionId = section.id;
+  }
+  section.editableNodes.forEach((node) => {
+    const objectId = node.sourceRef?.objectId;
+    if (!objectId) {
+      return;
+    }
+    const target = getElementByPath(element, node.path);
+    target?.setAttribute('data-htmlpoint-object-id', objectId);
+  });
 }
 
 function applyTranslationUpdates(document: Document, translations: TranslationEntry[]): void {

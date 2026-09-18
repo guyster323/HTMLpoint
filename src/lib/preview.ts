@@ -862,6 +862,7 @@ export function buildPreviewHtml(
         roundLayout(state.baseTranslateY + offsetY) + 'px',
       'important'
     );
+    refreshDiagramConnectors();
   }
 
   function applyLiveSize(state, width, height) {
@@ -890,6 +891,40 @@ export function buildPreviewHtml(
       state.element.style.setProperty('max-width', 'none', 'important');
       state.element.style.objectFit = state.element.style.objectFit || 'contain';
     }
+    refreshDiagramConnectors();
+  }
+
+  function refreshDiagramConnectors() {
+    const nodes = new Map();
+    document.querySelectorAll('[data-htmlpoint-shape][data-htmlpoint-object-id], [data-fig-node][data-node-id]').forEach((node) => {
+      const objectId = node.getAttribute('data-htmlpoint-object-id') || node.getAttribute('data-node-id');
+      if (objectId) nodes.set(objectId, node);
+    });
+    document.querySelectorAll('[data-htmlpoint-connector], .htmlpoint-connector').forEach((connector) => {
+      if (!(connector instanceof HTMLElement)) return;
+      const fromId = connector.getAttribute('data-from') || connector.getAttribute('data-from-id') || connector.getAttribute('data-source');
+      const toId = connector.getAttribute('data-to') || connector.getAttribute('data-to-id') || connector.getAttribute('data-target');
+      const from = fromId ? nodes.get(fromId) : undefined;
+      const to = toId ? nodes.get(toId) : undefined;
+      const parent = connector.parentElement;
+      if (!(from instanceof Element) || !(to instanceof Element) || !parent) return;
+      const parentRect = parent.getBoundingClientRect();
+      const fromRect = from.getBoundingClientRect();
+      const toRect = to.getBoundingClientRect();
+      const startX = fromRect.left + fromRect.width / 2 - parentRect.left;
+      const startY = fromRect.top + fromRect.height / 2 - parentRect.top;
+      const endX = toRect.left + toRect.width / 2 - parentRect.left;
+      const endY = toRect.top + toRect.height / 2 - parentRect.top;
+      const length = Math.max(1, Math.hypot(endX - startX, endY - startY));
+      const angle = Math.atan2(endY - startY, endX - startX) * 180 / Math.PI;
+      connector.style.setProperty('position', 'absolute', 'important');
+      connector.style.setProperty('left', roundLayout(startX) + 'px', 'important');
+      connector.style.setProperty('top', roundLayout(startY) + 'px', 'important');
+      connector.style.setProperty('width', roundLayout(length) + 'px', 'important');
+      connector.style.setProperty('height', '0px', 'important');
+      connector.style.setProperty('transform', 'rotate(' + roundLayout(angle) + 'deg)', 'important');
+      connector.style.setProperty('transform-origin', '0 0', 'important');
+    });
   }
 
   function restoreTransientStates(states) {
@@ -1018,6 +1053,7 @@ export function buildPreviewHtml(
   }
 
   function refreshSelectionOverlayGeometry() {
+    refreshDiagramConnectors();
     const entries = layoutEntries(Array.from(selectedNodeIds));
     const overlays = Array.from(document.querySelectorAll('.htmlpoint-selection-overlay'));
     if (!entries.length || !overlays.length) return;

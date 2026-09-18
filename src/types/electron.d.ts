@@ -3,7 +3,7 @@ import type { HtmlpointApi } from '../../electron/preload.cjs';
 type HtmlpointBridge = Readonly<
   Omit<
     HtmlpointApi,
-    'registerPreviewSource' | 'openDroppedHtmlFile' | 'onMenuUndo' | 'onMenuRedo' | 'saveHtml' | 'onMenuSave' | 'discardAutoBackups' | 'openExternalLink'
+    'registerPreviewSource' | 'openDroppedHtmlFile' | 'onMenuUndo' | 'onMenuRedo' | 'saveHtml' | 'onMenuSave' | 'discardAutoBackups' | 'openExternalLink' | 'savePptx' | 'savePdf'
   > & {
     registerPreviewSource?: HtmlpointApi['registerPreviewSource'];
     openDroppedHtmlFile?: HtmlpointApi['openDroppedHtmlFile'];
@@ -13,6 +13,8 @@ type HtmlpointBridge = Readonly<
     onMenuSave?: HtmlpointApi['onMenuSave'];
     discardAutoBackups?: HtmlpointApi['discardAutoBackups'];
     openExternalLink?: HtmlpointApi['openExternalLink'];
+    savePptx?: HtmlpointApi['savePptx'];
+    savePdf?: HtmlpointApi['savePdf'];
   }
 >;
 
