@@ -19,15 +19,21 @@ import {
   applyTextStyleToNodes,
   applyImageFilter,
   captureRuntimeTable,
+  copyEditableNodes,
   cropImage,
   deleteSection,
   deleteTableColumn,
   deleteTableRow,
+  deleteEditableNodes,
   duplicateSection,
+  duplicateEditableNodes,
   editTextNodeWithOutcome,
   filterTableRows,
   insertImageAfterNode,
+  insertConnector,
+  insertShapeAfterNode,
   insertTableAfterNode,
+  pasteEditableNodes,
   importTabDelimitedTable,
   mergeTableCellRight,
   moveSection,
@@ -38,11 +44,16 @@ import {
   setTableCellText,
   sortTableByColumn,
   styleTableCell,
+  applyDiagramLayerCommand,
+  groupEditableNodes,
+  ungroupEditableNode,
   unmergeTableCell,
   updateChartData,
   updateChartPresentation,
-  updateTranslationText
+  updateTranslationText,
+  DiagramLayerCommand
 } from './lib/editing';
+import type { DiagramClipboardPayload } from './lib/editing';
 import {
   normalizeSemanticLayoutSelection,
   semanticLayoutNodes,
@@ -54,14 +65,18 @@ import {
   openHtmlDialog,
   openImageAsDataUrl,
   saveHtml,
-  saveAsHtml
+  saveAsHtml,
+  saveAsPptx,
+  saveAsDeploymentHtml,
+  saveAsPdf
 } from './lib/fileServices';
 import { acceptDroppedHtmlFile, isFileDrag } from './lib/dropImport';
 import {
   isCurrentBackupSnapshot,
   nextReportAfterSave,
   shouldCreateAutoBackup,
-  validateOpenedReport
+  validateOpenedReport,
+  ReportImportError
 } from './lib/documentActions';
 import type { PendingDocumentAction } from './lib/documentActions';
 import { clampPropertiesWidth } from './lib/uiSizing';
@@ -72,6 +87,8 @@ import {
   getVisibleSections
 } from './lib/sectionNavigation';
 import { buildChangeSummaryEntries } from './lib/changeSummary';
+import { evaluateDocumentQuality } from './lib/documentQuality';
+import { createRenderedDocumentSnapshot } from './lib/renderSnapshot';
 import {
   shouldApplyPreviewSelectionState,
   shouldStorePreviewSnapshot
@@ -89,6 +106,7 @@ import type {
 } from './lib/editorSession';
 import { Canvas } from './components/Canvas';
 import { ChangeSummaryTimeline } from './components/ChangeSummaryTimeline';
+import { QualityPanel } from './components/QualityPanel';
 import { Modal } from './components/Modal';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { Ribbon } from './components/Ribbon';
@@ -132,10 +150,16 @@ export function App(): JSX.Element {
   const [loadingAnnouncement, setLoadingAnnouncement] = useState<string>();
   const [dragActive, setDragActive] = useState(false);
   const [showChangeSummary, setShowChangeSummary] = useState(false);
+  const [showQuality, setShowQuality] = useState(false);
   const [pendingDocumentAction, setPendingDocumentAction] = useState<PendingDocumentAction | null>(null);
+  const [pendingImportSelection, setPendingImportSelection] = useState<{
+    opened: Parameters<typeof validateOpenedReport>[0];
+    candidates: NonNullable<ReportDocument['importCandidates']>;
+  }>();
   const [pendingSaveWarning, setPendingSaveWarning] = useState<PendingSaveWarning>();
   const [pendingSaveFeedback, setPendingSaveFeedback] = useState<TransientOutput>();
   const [documentActionBusy, setDocumentActionBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const [propertiesWidth, setPropertiesWidth] = useState(330);
   const [resizingProperties, setResizingProperties] = useState(false);
   const [selectionSnapshots, setSelectionSnapshots] = useState<Record<string, SelectionVisualSnapshot>>({});
@@ -156,6 +180,8 @@ export function App(): JSX.Element {
   }>();
   const reportRef = useRef(report);
   const insertionRequestCounterRef = useRef(0);
+  const diagramClipboardRef = useRef<DiagramClipboardPayload>();
+  const exportAbortRef = useRef<AbortController | null>(null);
   const layoutCommandCounterRef = useRef(0);
   const dragDepthRef = useRef(0);
   const pendingDocumentActionRef = useRef<PendingDocumentAction | null>(null);
@@ -186,6 +212,10 @@ export function App(): JSX.Element {
     previewRevisionRef.current = previewRevision;
   }, [previewRevision]);
   const changeSummaryOpen = showChangeSummary && !pendingDocumentAction;
+  const qualityReport = useMemo(
+    () => (report ? evaluateDocumentQuality(createRenderedDocumentSnapshot(report)) : { issues: [], errors: 0, warnings: 0 }),
+    [report]
+  );
   const changeSummaryEntries = useMemo(
     () => buildChangeSummaryEntries(changeSummaryOpen, report),
     [changeSummaryOpen, report]
@@ -312,6 +342,17 @@ export function App(): JSX.Element {
         selectedNodeIds.includes(node.id)
       ),
     [selectedNodeIds, selectedSection]
+  );
+  const selectedDiagramNodes = useMemo(
+    () => {
+      const candidates = selectedNodes.length ? selectedNodes : selectedNode ? [selectedNode] : [];
+      return candidates.filter((node) => Boolean(node.diagram));
+    },
+    [selectedNode, selectedNodes]
+  );
+  const selectedDiagramNodeIds = useMemo(
+    () => selectedDiagramNodes.map((node) => node.id),
+    [selectedDiagramNodes]
   );
 
   const sameKindSelection = useMemo(
@@ -874,14 +915,15 @@ export function App(): JSX.Element {
     (
       opened: Parameters<typeof validateOpenedReport>[0],
       allowedReport: ReportDocument | null,
-      successMessage?: string
+      successMessage?: string,
+      selectedCandidatePath?: number[]
     ): PendingDocumentAction | null => {
       const currentReport = reportRef.current;
       if (currentReport?.dirty && currentReport !== allowedReport) {
         return { type: 'opened-file', opened };
       }
       performance.mark('htmlpoint:parse:start');
-      const nextReport = validateOpenedReport(opened);
+      const nextReport = validateOpenedReport(opened, selectedCandidatePath);
       performance.mark('htmlpoint:parse:end');
       loadReport(nextReport, opened.backupPath, successMessage, opened.warnings?.join(' '));
       return null;
@@ -912,6 +954,10 @@ export function App(): JSX.Element {
         await window.htmlpoint?.confirmClose();
         return null;
       } catch (error) {
+        if (error instanceof ReportImportError) {
+          setPendingImportSelection({ opened: error.opened, candidates: error.candidates });
+          return null;
+        }
         setMessage({ kind: 'error', text: errorMessage(error) });
         return null;
       }
@@ -1000,6 +1046,115 @@ export function App(): JSX.Element {
   }, [saveReportSnapshot, setActionBusy]);
   const handleSave = useCallback(() => saveCurrentReport(false), [saveCurrentReport]);
   const handleSaveAs = useCallback(() => saveCurrentReport(true), [saveCurrentReport]);
+  const handleReviewQuality = useCallback(() => {
+    setShowQuality(true);
+  }, []);
+  const handleQualitySelect = useCallback((issue: { sectionId: string; nodeId?: string }) => {
+    setShowQuality(false);
+    setSelection({
+      sectionId: issue.sectionId,
+      nodeId: issue.nodeId,
+      nodeIds: issue.nodeId ? [issue.nodeId] : [],
+      cell: { row: 0, cell: 0 }
+    });
+    setFocusedOutline(undefined);
+  }, [setSelection]);
+  const handleExportPptx = useCallback(async () => {
+    const currentReport = reportRef.current;
+    if (!currentReport || exportBusy || documentActionBusyRef.current) {
+      return;
+    }
+    const exportController = new AbortController();
+    exportAbortRef.current = exportController;
+    setExportBusy(true);
+    setMessage({ kind: 'status', text: 'PPTX 변환을 준비하고 있습니다…' });
+    try {
+      const saved = await saveAsPptx(currentReport, {
+        signal: exportController.signal,
+        onProgress: ({ page, total }) => {
+          setMessage({ kind: 'status', text: `PPTX 변환 중… ${page}/${total}` });
+        }
+      });
+      if (!saved) {
+        setMessage({ kind: 'status', text: 'PPTX 저장이 취소되었습니다.' });
+      } else {
+        const report = saved.report;
+        const detail = report.pictureFallbackCount
+          ? ` 그림 대체 ${report.pictureFallbackCount}개.`
+          : '';
+        setMessage({
+          kind: report.warnings.length ? 'error' : 'status',
+          text: `PPTX 저장 완료: ${saved.filePath}.${detail}`
+        });
+      }
+    } catch (error) {
+      if (exportController.signal.aborted) {
+        setMessage({ kind: 'status', text: 'PPTX 출력이 취소되었습니다.' });
+        return;
+      }
+      const exportReport = (error as { report?: { errors?: Array<{ message: string }> } }).report;
+      const detail = exportReport?.errors?.map((item) => item.message).join(' ') || errorMessage(error);
+      setMessage({ kind: 'error', text: `PPTX 변환 실패: ${detail}` });
+    } finally {
+      if (exportAbortRef.current === exportController) {
+        exportAbortRef.current = null;
+      }
+      setExportBusy(false);
+    }
+  }, [exportBusy]);
+  const handleCancelExport = useCallback(() => {
+    if (!exportAbortRef.current) {
+      setMessage({ kind: 'status', text: '현재 출력 작업은 취소할 수 없습니다.' });
+      return;
+    }
+    exportAbortRef.current.abort();
+    setMessage({ kind: 'status', text: 'PPTX 출력 취소를 요청했습니다.' });
+  }, []);
+  const handleExportDeploymentHtml = useCallback(async () => {
+    const currentReport = reportRef.current;
+    if (!currentReport || exportBusy || documentActionBusyRef.current) {
+      return;
+    }
+    setExportBusy(true);
+    setMessage({ kind: 'status', text: '배포용 HTML을 준비하고 있습니다…' });
+    try {
+      const saved = await saveAsDeploymentHtml(currentReport);
+      if (!saved) {
+        setMessage({ kind: 'status', text: '배포용 HTML 저장이 취소되었습니다.' });
+      } else {
+        const warningDetail = saved.warnings.length
+          ? ` 경고 ${saved.warnings.length}개`
+          : '';
+        setMessage({
+          kind: saved.warnings.length ? 'error' : 'status',
+          text: `배포용 HTML 저장 완료: ${saved.filePath}.${warningDetail}`
+        });
+      }
+    } catch (error) {
+      setMessage({ kind: 'error', text: `배포용 HTML 저장 실패: ${errorMessage(error)}` });
+    } finally {
+      setExportBusy(false);
+    }
+  }, [exportBusy]);
+  const handleExportPdf = useCallback(async () => {
+    const currentReport = reportRef.current;
+    if (!currentReport || exportBusy || documentActionBusyRef.current) {
+      return;
+    }
+    setExportBusy(true);
+    setMessage({ kind: 'status', text: 'PDF를 준비하고 있습니다…' });
+    try {
+      const saved = await saveAsPdf(currentReport);
+      setMessage({
+        kind: 'status',
+        text: saved ? `PDF 저장 완료: ${saved.filePath}` : 'PDF 인쇄 대화상자를 열었습니다.'
+      });
+    } catch (error) {
+      setMessage({ kind: 'error', text: `PDF 저장 실패: ${errorMessage(error)}` });
+    } finally {
+      setExportBusy(false);
+    }
+  }, [exportBusy]);
   const handlePendingSave = useCallback(async () => {
     const action = pendingDocumentActionRef.current;
     const reportToSave = reportRef.current;
@@ -1068,6 +1223,20 @@ export function App(): JSX.Element {
       setPendingAction(null);
     }
   }, [setPendingAction]);
+  const handleImportCandidate = useCallback(
+    (candidatePath: number[]) => {
+      const pending = pendingImportSelection;
+      if (!pending) return;
+      try {
+        const nextReport = validateOpenedReport(pending.opened, candidatePath);
+        setPendingImportSelection(undefined);
+        loadReport(nextReport, pending.opened.backupPath, `${pending.opened.fileName} loaded`);
+      } catch (error) {
+        setMessage({ kind: 'error', text: `가져오기 실패: ${errorMessage(error)}` });
+      }
+    },
+    [loadReport, pendingImportSelection]
+  );
   const handlePendingWarning = useCallback(async () => {
     const action = pendingDocumentActionRef.current;
     const continuationReport = pendingSaveWarning?.continuationReport;
@@ -1131,11 +1300,47 @@ export function App(): JSX.Element {
       } else if (event.key.toLowerCase() === 'y') {
         event.preventDefault();
         handleRedo();
+      } else if (event.key.toLowerCase() === 'c') {
+        const currentReport = reportRef.current;
+        if (!currentReport || !selectedSectionId || !selectedDiagramNodeIds.length) return;
+        const clipboard = copyEditableNodes(currentReport, selectedSectionId, selectedDiagramNodeIds);
+        if (!clipboard) return;
+        event.preventDefault();
+        diagramClipboardRef.current = clipboard;
+        void navigator.clipboard?.writeText(JSON.stringify(clipboard)).catch(() => undefined);
+        setMessage({ kind: 'status', text: '도식 개체를 클립보드에 복사했습니다.' });
+      } else if (event.key.toLowerCase() === 'v') {
+        if (!selectedSectionId) return;
+        event.preventDefault();
+        void (async () => {
+          let clipboard = diagramClipboardRef.current;
+          try {
+            const raw = await navigator.clipboard?.readText();
+            if (raw) {
+              const parsed = JSON.parse(raw) as Partial<DiagramClipboardPayload>;
+              if (parsed.type === 'htmlpoint-diagram-clipboard' && parsed.version === 1 && Array.isArray(parsed.objects)) {
+                clipboard = parsed as DiagramClipboardPayload;
+              }
+            }
+          } catch {
+            // The in-memory clipboard remains available when browser permission is denied.
+          }
+          if (!clipboard) {
+            setMessage({ kind: 'status', text: '붙여넣을 도식 클립보드가 없습니다.' });
+            return;
+          }
+          diagramClipboardRef.current = clipboard;
+          commitInsertion(
+            selectedSectionId,
+            (current) => pasteEditableNodes(current, selectedSectionId, clipboard),
+            '도식 개체를 붙여넣었습니다.'
+          );
+        })();
       }
     };
     window.addEventListener('keydown', handleHistoryShortcut);
     return () => window.removeEventListener('keydown', handleHistoryShortcut);
-  }, [handleRedo, handleUndo]);
+  }, [commitInsertion, handleRedo, handleUndo, selectedDiagramNodeIds, selectedSectionId]);
   const requireSection = useCallback(() => selectedSectionId, [selectedSectionId]);
   const requireNode = useCallback(() => selectedNodeId, [selectedNodeId]);
   const handleSelectNode = useCallback((nodeId: string, additive = false) => {
@@ -1188,6 +1393,50 @@ export function App(): JSX.Element {
     layoutCommandCounterRef.current += 1;
     setLayoutCommand({ id: layoutCommandCounterRef.current, command });
   }, [selectedNodeIds.length, selectedSectionId]);
+  const handleDuplicateDiagram = useCallback(() => {
+    if (!selectedSectionId || !selectedDiagramNodeIds.length) {
+      setMessage({ kind: 'status', text: '복제할 도식 개체를 먼저 선택하세요.' });
+      return;
+    }
+    commitInsertion(
+      selectedSectionId,
+      (current) => duplicateEditableNodes(current, selectedSectionId, selectedDiagramNodeIds),
+      '도식 개체를 복제했습니다.'
+    );
+  }, [commitInsertion, selectedDiagramNodeIds, selectedSectionId]);
+  const handleDeleteDiagram = useCallback(() => {
+    if (!selectedSectionId || !selectedDiagramNodeIds.length) {
+      setMessage({ kind: 'status', text: '삭제할 도식 개체를 먼저 선택하세요.' });
+      return;
+    }
+    commit((current) => deleteEditableNodes(current, selectedSectionId, selectedDiagramNodeIds));
+  }, [commit, selectedDiagramNodeIds, selectedSectionId]);
+  const handleDiagramLayer = useCallback(
+    (command: DiagramLayerCommand) => {
+      const nodeId = selectedDiagramNodeIds[0];
+      if (!selectedSectionId || !nodeId) {
+        setMessage({ kind: 'status', text: '순서를 바꿀 도식 개체를 하나 선택하세요.' });
+        return;
+      }
+      commit((current) => applyDiagramLayerCommand(current, selectedSectionId, nodeId, command));
+    },
+    [commit, selectedDiagramNodeIds, selectedSectionId]
+  );
+  const handleGroupDiagram = useCallback(() => {
+    if (!selectedSectionId || selectedDiagramNodeIds.length < 2) {
+      setMessage({ kind: 'status', text: '그룹화할 도식 개체를 두 개 이상 선택하세요.' });
+      return;
+    }
+    commit((current) => groupEditableNodes(current, selectedSectionId, selectedDiagramNodeIds));
+  }, [commit, selectedDiagramNodeIds, selectedSectionId]);
+  const handleUngroupDiagram = useCallback(() => {
+    const nodeId = selectedDiagramNodeIds[0];
+    if (!selectedSectionId || !nodeId) {
+      setMessage({ kind: 'status', text: '그룹 안의 도식 개체를 하나 선택하세요.' });
+      return;
+    }
+    commit((current) => ungroupEditableNode(current, selectedSectionId, nodeId));
+  }, [commit, selectedDiagramNodeIds, selectedSectionId]);
   const handleReplaceImage = useCallback(
     async (nodeId: string) => {
       const image = await openImageAsDataUrl();
@@ -1299,12 +1548,19 @@ export function App(): JSX.Element {
         selectedKind={effectiveSelectedNode?.kind}
         selectedTextStyle={effectiveSelectedNode?.textStyle}
         selectedObjectCount={selectedObjectCount}
+        selectedDiagramObjectCount={selectedDiagramNodes.length}
         canUndo={past.length > 0}
         canRedo={future.length > 0}
         onTabChange={setActiveTab}
         onOpen={handleOpen}
         onSave={handleSave}
         onSaveAs={handleSaveAs}
+        onExportPptx={handleExportPptx}
+        onExportDeploymentHtml={handleExportDeploymentHtml}
+        onExportPdf={handleExportPdf}
+        onCancelExport={handleCancelExport}
+        exportBusy={exportBusy}
+        onReviewQuality={handleReviewQuality}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onTextStyle={handleTextStyle}
@@ -1320,6 +1576,41 @@ export function App(): JSX.Element {
           }
         }}
         onInsertImage={handleInsertImage}
+        onInsertShape={(shapeType) => {
+          const sectionId = requireSection();
+          if (sectionId) {
+            commitInsertion(
+              sectionId,
+              (current) => insertShapeAfterNode(current, sectionId, selectedNodeId, shapeType, 'New shape'),
+              '도형을 삽입했습니다.'
+            );
+          }
+        }}
+        onInsertConnector={() => {
+          const sectionId = requireSection();
+          const [from, to] = selectedNodes;
+          if (
+            !sectionId ||
+            selectedNodes.length !== 2 ||
+            !from ||
+            !to ||
+            from.diagram?.role !== 'node' ||
+            to.diagram?.role !== 'node'
+          ) {
+            setMessage({ kind: 'error', text: '연결할 도식 개체 두 개를 선택하세요.' });
+            return;
+          }
+          commitInsertion(
+            sectionId,
+            (current) => insertConnector(current, sectionId, from.id, to.id),
+            '연결선을 삽입했습니다.'
+          );
+        }}
+        onDiagramDuplicate={handleDuplicateDiagram}
+        onDiagramDelete={handleDeleteDiagram}
+        onDiagramLayer={handleDiagramLayer}
+        onDiagramGroup={handleGroupDiagram}
+        onDiagramUngroup={handleUngroupDiagram}
         onDuplicate={() => selectedSectionId && commit((current) => duplicateSection(current, selectedSectionId))}
         onDelete={handleDeleteSection}
         onHideToggle={() =>
@@ -1807,6 +2098,54 @@ export function App(): JSX.Element {
             onClick={() => setShowChangeSummary(false)}
           >
             Close
+          </button>
+        </div>
+      </Modal>
+      <Modal
+        open={showQuality && !pendingDocumentAction}
+        title="문서 품질 검사"
+        description={`오류 ${qualityReport.errors}개 · 경고 ${qualityReport.warnings}개`}
+        initialFocusRef={changeSummaryCloseButtonRef}
+        onEscape={() => setShowQuality(false)}
+      >
+        <QualityPanel report={qualityReport} onSelect={handleQualitySelect} />
+        <div className="modal-actions">
+          <button
+            ref={changeSummaryCloseButtonRef}
+            type="button"
+            onClick={() => setShowQuality(false)}
+          >
+            Close
+          </button>
+        </div>
+      </Modal>
+      <Modal
+        open={Boolean(pendingImportSelection)}
+        title="편집 범위 선택"
+        description="이 HTML에서 편집할 후보 영역을 선택하세요. 원본 파일은 선택만으로 변경되지 않습니다."
+        initialFocusRef={pendingCancelButtonRef}
+        onEscape={() => setPendingImportSelection(undefined)}
+      >
+        <div className="import-candidate-list">
+          {pendingImportSelection?.candidates.map((candidate) => (
+            <button
+              key={candidate.id}
+              type="button"
+              className="candidate-button"
+              onClick={() => handleImportCandidate(candidate.domPath)}
+            >
+              <strong>{candidate.label}</strong>
+              <span>{candidate.reason}</span>
+            </button>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button
+            ref={pendingCancelButtonRef}
+            type="button"
+            onClick={() => setPendingImportSelection(undefined)}
+          >
+            취소
           </button>
         </div>
       </Modal>

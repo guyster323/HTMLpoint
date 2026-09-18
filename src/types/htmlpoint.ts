@@ -1,10 +1,104 @@
-export type ReportSectionKind = 'header' | 'section' | 'generic';
-export type EditableNodeKind = 'text' | 'table' | 'image' | 'chart' | 'list';
+export type ReportSectionKind = 'header' | 'section' | 'slide' | 'canvas' | 'generic';
+export type EditableNodeKind =
+  | 'text'
+  | 'table'
+  | 'image'
+  | 'chart'
+  | 'list'
+  | 'shape'
+  | 'connector';
 export type ReportLanguage = 'ko' | 'en' | string;
+
+export type ImportAdapterKind = 'semantic' | 'slide' | 'fig-canvas' | 'candidate';
+
+export interface SourceRef {
+  adapter: ImportAdapterKind;
+  domPath: number[];
+  htmlId?: string;
+  objectId?: string;
+}
+
+export interface ImportCandidate {
+  id: string;
+  adapter: ImportAdapterKind;
+  selector: string;
+  label: string;
+  domPath: number[];
+  reason: string;
+}
+
+export type RenderSnapshotWarningCode =
+  | 'missing-asset'
+  | 'font-fallback'
+  | 'unsupported-css'
+  | 'text-overflow'
+  | 'outside-page'
+  | 'broken-connector'
+  | 'picture-fallback';
+
+export interface RenderSnapshotWarning {
+  code: RenderSnapshotWarningCode;
+  message: string;
+  sourceNodeId?: string;
+  severity: 'warning' | 'error';
+}
+
+export interface RenderTextRun {
+  text: string;
+  sourceNodeId?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: string;
+  fontFamily?: string;
+  fontSizePx?: number;
+}
+
+export interface RenderBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface RenderSnapshotObject {
+  id: string;
+  sourceNodeId?: string;
+  kind: EditableNodeKind | 'page-background';
+  bounds: RenderBounds;
+  paintOrder: number;
+  textRuns?: RenderTextRun[];
+  assetSrc?: string;
+  table?: TableSnapshot;
+  shapeType?: 'rect' | 'ellipse';
+  diagram?: DiagramObjectSnapshot;
+  capabilities: string[];
+  warnings: RenderSnapshotWarning[];
+}
+
+export interface RenderSnapshotPage {
+  sectionId: string;
+  title: string;
+  width: number;
+  height: number;
+  language?: ReportLanguage;
+  objects: RenderSnapshotObject[];
+  warnings: RenderSnapshotWarning[];
+}
+
+export interface RenderedDocumentSnapshot {
+  schemaVersion: 1;
+  reportId: string;
+  reportRevision: string;
+  createdAt: number;
+  pages: RenderSnapshotPage[];
+  warnings: RenderSnapshotWarning[];
+}
 
 export interface ParseOptions {
   fileName?: string;
   sourcePath?: string;
+  selectedCandidatePath?: number[];
 }
 
 export interface TableCellSnapshot {
@@ -83,6 +177,21 @@ export interface EditableNode {
   image?: ImageSnapshot;
   chart?: ChartSnapshot;
   chartPresentation?: ChartPresentationSettings;
+  sourceRef?: SourceRef;
+  diagram?: DiagramObjectSnapshot;
+}
+
+export interface DiagramObjectSnapshot {
+  role: 'node' | 'edge';
+  objectId: string;
+  fromObjectId?: string;
+  toObjectId?: string;
+  startAnchor?: string;
+  endAnchor?: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
 }
 
 export interface SelectionVisualSnapshot {
@@ -158,6 +267,8 @@ export interface EditOperation {
     | 'image'
     | 'chart'
     | 'layout'
+    | 'diagram'
+    | 'export'
     | 'section'
     | 'serialize';
   label: string;
@@ -182,6 +293,7 @@ export interface ReportSection {
   outlineItems?: SectionOutlineItem[];
   editableNodes: EditableNode[];
   changed: boolean;
+  sourceRef?: SourceRef;
 }
 export interface SectionOutlineItem {
   id: string;
@@ -204,6 +316,7 @@ export interface ReportDocument {
   dirty: boolean;
   createdAt: number;
   updatedAt: number;
+  importCandidates?: ImportCandidate[];
 }
 
 export interface EditResult {
@@ -256,6 +369,8 @@ export interface TextStyleSettings {
   underline?: boolean;
   color?: string;
 }
+
+export interface TextRangeStyleSettings extends TextStyleSettings {}
 
 export interface TextEffectSettings {
   preset: 'none' | 'neutral' | 'info' | 'warning' | 'danger' | 'success';

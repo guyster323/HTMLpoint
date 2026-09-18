@@ -23,6 +23,10 @@ const api = {
     ipcRenderer.invoke('htmlpoint:save', payload),
   saveAsHtml: (payload: { defaultPath?: string; html: string; sourcePath?: string; warnings?: string[] }) =>
     ipcRenderer.invoke('htmlpoint:save-as', payload),
+  savePptx: (payload: { defaultPath?: string; data: Uint8Array }) =>
+    ipcRenderer.invoke('htmlpoint:save-pptx', payload),
+  savePdf: (payload: { defaultPath?: string; html: string; sourcePath?: string }) =>
+    ipcRenderer.invoke('htmlpoint:save-pdf', payload),
   createBackup: (payload: { filePath: string; html: string }) =>
     ipcRenderer.invoke('htmlpoint:create-backup', payload),
   discardAutoBackups: (filePath: string): Promise<void> =>

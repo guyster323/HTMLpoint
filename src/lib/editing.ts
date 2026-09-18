@@ -10,6 +10,7 @@ import {
   ReportSection,
   TableSortDirection,
   TextEditOutcome,
+  TextRangeStyleSettings,
   TextEffectSettings,
   TextReplacementOutcome,
   TextStyleSettings,
@@ -1681,7 +1682,16 @@ function mutateNode(
       )
     },
     {
-      type: node.kind === 'table' ? 'table' : node.kind === 'image' ? 'image' : node.kind === 'chart' ? 'chart' : 'text',
+      type:
+        node.kind === 'table'
+          ? 'table'
+          : node.kind === 'image'
+            ? 'image'
+            : node.kind === 'chart'
+              ? 'chart'
+              : node.kind === 'shape' || node.kind === 'connector'
+                ? 'diagram'
+                : 'text',
       label,
       sectionId,
       nodeId,
@@ -1880,6 +1890,622 @@ export function captureRuntimeTable(
     }
   );
   return makeEditResult(updatedReport, insertedNodeId);
+}
+
+export function applyTextRangeFormatting(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId: string,
+  start: number,
+  end: number,
+  settings: TextRangeStyleSettings
+): ReportDocument {
+  const section = findSection(report, sectionId);
+  const node = section?.editableNodes.find((candidate) => candidate.id === nodeId);
+  if (!section || !node || (node.kind !== 'text' && node.kind !== 'list')) {
+    return report;
+  }
+  const normalizedStart = Math.max(0, Math.floor(start));
+  const normalizedEnd = Math.min(node.text.length, Math.floor(end));
+  if (normalizedStart >= normalizedEnd) {
+    return report;
+  }
+  return mutateNode(
+    report,
+    sectionId,
+    nodeId,
+    (_root, element) => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      const changed = applyTextRangeToElement(
+        element,
+        normalizedStart,
+        normalizedEnd,
+        settings
+      );
+      if (changed) {
+        element.setAttribute('data-htmlpoint-edited', 'true');
+      }
+      return changed;
+    },
+    `부분 텍스트 서식: ${section.title}`
+  );
+}
+
+function applyTextRangeToElement(
+  element: HTMLElement,
+  start: number,
+  end: number,
+  settings: TextRangeStyleSettings
+): boolean {
+  const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  while (walker.nextNode()) {
+    const textNode = walker.currentNode as Text;
+    if (textNode.nodeValue) {
+      textNodes.push(textNode);
+    }
+  }
+  let cursor = 0;
+  let changed = false;
+  textNodes.forEach((textNode) => {
+    const value = textNode.nodeValue ?? '';
+    const nodeStart = cursor;
+    const nodeEnd = cursor + value.length;
+    cursor = nodeEnd;
+    const overlapStart = Math.max(start, nodeStart);
+    const overlapEnd = Math.min(end, nodeEnd);
+    if (overlapStart >= overlapEnd || !textNode.parentNode) {
+      return;
+    }
+    let selected = textNode;
+    const localEnd = overlapEnd - nodeStart;
+    if (localEnd < value.length) {
+      textNode.splitText(localEnd);
+    }
+    const localStart = overlapStart - nodeStart;
+    if (localStart > 0) {
+      selected = textNode.splitText(localStart);
+    }
+    const wrapper = element.ownerDocument.createElement('span');
+    applyTextRangeStyles(wrapper, settings);
+    const parent = selected.parentNode;
+    if (!parent) {
+      return;
+    }
+    parent.insertBefore(wrapper, selected);
+    wrapper.appendChild(selected);
+    changed = true;
+  });
+  return changed;
+}
+
+function applyTextRangeStyles(
+  element: HTMLElement,
+  settings: TextRangeStyleSettings
+): void {
+  if (settings.fontFamily) element.style.fontFamily = settings.fontFamily;
+  if (settings.fontSize !== undefined) element.style.fontSize = `${settings.fontSize}px`;
+  if (settings.bold !== undefined) element.style.fontWeight = settings.bold ? '700' : '400';
+  if (settings.italic !== undefined) element.style.fontStyle = settings.italic ? 'italic' : 'normal';
+  if (settings.underline !== undefined) {
+    element.style.textDecoration = settings.underline ? 'underline' : 'none';
+  }
+  if (settings.color) element.style.color = settings.color;
+}
+
+export type DiagramShapeType = 'rect' | 'ellipse';
+
+export function insertShapeAfterNode(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId?: string,
+  shapeType: DiagramShapeType = 'rect',
+  label = 'Shape'
+): EditResult {
+  const objectId = makeInsertedDiagramObjectId('shape');
+  return insertDiagramObject(report, sectionId, nodeId, {
+    role: 'node',
+    objectId,
+    shapeType,
+    label
+  });
+}
+
+export function insertConnector(
+  report: ReportDocument,
+  sectionId: string,
+  fromNodeId: string,
+  toNodeId: string
+): EditResult {
+  const section = findSection(report, sectionId);
+  const from = section?.editableNodes.find((node) => node.id === fromNodeId);
+  const to = section?.editableNodes.find((node) => node.id === toNodeId);
+  const fromObjectId = from?.diagram?.objectId ?? from?.sourceRef?.objectId;
+  const toObjectId = to?.diagram?.objectId ?? to?.sourceRef?.objectId;
+  if (!section || !fromObjectId || !toObjectId || fromObjectId === toObjectId) {
+    return makeEditResult(report);
+  }
+  const objectId = makeInsertedDiagramObjectId('connector');
+  return insertDiagramObject(report, sectionId, undefined, {
+    role: 'edge',
+    objectId,
+    fromObjectId,
+    toObjectId,
+    label: 'Connector'
+  });
+}
+
+export type DiagramLayerCommand = 'front' | 'back' | 'forward' | 'backward';
+
+export function duplicateEditableNodes(
+  report: ReportDocument,
+  sectionId: string,
+  nodeIds: string[]
+): EditResult {
+  const section = findSection(report, sectionId);
+  if (!section || !nodeIds.length) {
+    return makeEditResult(report);
+  }
+  const document = parseHtml(section.html);
+  const sectionRoot = document.body.firstElementChild as HTMLElement | null;
+  if (!sectionRoot) {
+    return makeEditResult(report);
+  }
+  const selected = section.editableNodes
+    .filter((node) => nodeIds.includes(node.id))
+    .map((node) => ({ node, element: getElementByPath(sectionRoot, node.path) }))
+    .filter((entry): entry is { node: (typeof section.editableNodes)[number]; element: HTMLElement } =>
+      entry.element instanceof HTMLElement && Boolean(entry.element.parentElement)
+    );
+  if (!selected.length) {
+    return makeEditResult(report);
+  }
+  const objectIdMap = new Map<string, string>();
+  selected.forEach(({ node }) => {
+    const objectId = node.diagram?.objectId ?? node.sourceRef?.objectId;
+    if (objectId) {
+      objectIdMap.set(objectId, makeInsertedDiagramObjectId(node.kind === 'connector' ? 'connector' : 'shape'));
+    }
+  });
+  const token = `htmlpoint-duplicate-${Date.now()}-${insertionTokenSequence += 1}`;
+  selected.forEach(({ node, element }) => {
+    const clone = element.cloneNode(true) as HTMLElement;
+    clone.setAttribute('data-htmlpoint-duplicate-token', token);
+    const oldObjectId = node.diagram?.objectId ?? node.sourceRef?.objectId;
+    const newObjectId = oldObjectId ? objectIdMap.get(oldObjectId) : undefined;
+    if (newObjectId) {
+      clone.setAttribute('data-htmlpoint-object-id', newObjectId);
+      if (node.kind === 'connector') {
+        ['data-from', 'data-from-id', 'data-source', 'data-start'].forEach((attribute) => {
+          const value = clone.getAttribute(attribute);
+          const mapped = value ? objectIdMap.get(value) : undefined;
+          if (mapped) clone.setAttribute(attribute, mapped);
+        });
+        ['data-to', 'data-to-id', 'data-target', 'data-end'].forEach((attribute) => {
+          const value = clone.getAttribute(attribute);
+          const mapped = value ? objectIdMap.get(value) : undefined;
+          if (mapped) clone.setAttribute(attribute, mapped);
+        });
+      }
+    }
+    element.after(clone);
+  });
+  const normalized = parseHtml(sectionRoot.outerHTML);
+  const normalizedRoot = normalized.body.firstElementChild as HTMLElement | null;
+  if (!normalizedRoot) {
+    return makeEditResult(report);
+  }
+  const insertedElements = Array.from(
+    normalizedRoot.querySelectorAll<HTMLElement>(`[data-htmlpoint-duplicate-token="${token}"]`)
+  );
+  insertedElements.forEach((element) => element.removeAttribute('data-htmlpoint-duplicate-token'));
+  const nextSection = parseSectionHtml(
+    { ...section, html: normalizedRoot.outerHTML, changed: true },
+    report.translations
+  );
+  const insertedNodeId = nextSection.editableNodes.find((node) =>
+    Array.from(objectIdMap.values()).includes(node.sourceRef?.objectId ?? '')
+  )?.id;
+  if (!insertedNodeId) {
+    return makeEditResult(report);
+  }
+  return makeEditResult(
+    markReportChanged(
+      {
+        ...report,
+        sections: report.sections.map((candidate) =>
+          candidate.id === sectionId ? nextSection : candidate
+        )
+      },
+      {
+        type: 'diagram',
+        label: `개체 복제: ${section.title}`,
+        sectionId,
+        nodeId: insertedNodeId,
+        before: section.html,
+        after: nextSection.html
+      }
+    ),
+    insertedNodeId
+  );
+}
+
+export interface DiagramClipboardPayload {
+  type: 'htmlpoint-diagram-clipboard';
+  version: 1;
+  sourceSectionId: string;
+  objects: Array<{
+    kind: 'shape' | 'connector';
+    objectId?: string;
+    html: string;
+  }>;
+}
+
+export function copyEditableNodes(
+  report: ReportDocument,
+  sectionId: string,
+  nodeIds: string[]
+): DiagramClipboardPayload | undefined {
+  const section = findSection(report, sectionId);
+  if (!section || !nodeIds.length) {
+    return undefined;
+  }
+  const document = parseHtml(section.html);
+  const sectionRoot = document.body.firstElementChild as HTMLElement | null;
+  if (!sectionRoot) {
+    return undefined;
+  }
+  const objects = section.editableNodes
+    .filter((node) => nodeIds.includes(node.id) && (node.kind === 'shape' || node.kind === 'connector'))
+    .map<DiagramClipboardPayload['objects'][number] | undefined>((node) => {
+      const element = getElementByPath(sectionRoot, node.path);
+      if (!(element instanceof HTMLElement)) {
+        return undefined;
+      }
+      return {
+        kind: node.kind as 'shape' | 'connector',
+        objectId: node.diagram?.objectId ?? node.sourceRef?.objectId,
+        html: element.outerHTML
+      };
+    })
+    .filter((object): object is DiagramClipboardPayload['objects'][number] => Boolean(object));
+  return objects.length
+    ? { type: 'htmlpoint-diagram-clipboard', version: 1, sourceSectionId: sectionId, objects }
+    : undefined;
+}
+
+export function pasteEditableNodes(
+  report: ReportDocument,
+  sectionId: string,
+  clipboard: DiagramClipboardPayload
+): EditResult {
+  const section = findSection(report, sectionId);
+  if (
+    !section ||
+    clipboard.type !== 'htmlpoint-diagram-clipboard' ||
+    clipboard.version !== 1 ||
+    !clipboard.objects.length ||
+    clipboard.objects.some(
+      (object) =>
+        (object.kind !== 'shape' && object.kind !== 'connector') ||
+        typeof object.html !== 'string' ||
+        object.html.length > 2_000_000
+    )
+  ) {
+    return makeEditResult(report);
+  }
+  const document = parseHtml(section.html);
+  const sectionRoot = document.body.firstElementChild as HTMLElement | null;
+  if (!sectionRoot) {
+    return makeEditResult(report);
+  }
+  let container = sectionRoot.querySelector<HTMLElement>('[data-htmlpoint-diagram="true"]');
+  if (!container) {
+    container = document.createElement('div');
+    container.setAttribute('data-htmlpoint-diagram', 'true');
+    container.style.position = 'relative';
+    container.style.minHeight = '180px';
+    container.style.width = '100%';
+    sectionRoot.appendChild(container);
+  }
+  const objectIdMap = new Map<string, string>();
+  clipboard.objects.forEach((object) => {
+    if (object.objectId) {
+      objectIdMap.set(object.objectId, makeInsertedDiagramObjectId(object.kind));
+    }
+  });
+  const insertedObjectIds: string[] = [];
+  clipboard.objects.forEach((object) => {
+    const template = document.createElement('template');
+    template.innerHTML = object.html.trim();
+    const element = template.content.firstElementChild;
+    if (!(element instanceof HTMLElement)) {
+      return;
+    }
+    const oldObjectId = object.objectId ?? element.getAttribute('data-htmlpoint-object-id') ?? undefined;
+    const newObjectId = oldObjectId ? objectIdMap.get(oldObjectId) : undefined;
+    if (newObjectId) {
+      element.setAttribute('data-htmlpoint-object-id', newObjectId);
+      insertedObjectIds.push(newObjectId);
+    }
+    if (object.kind === 'connector') {
+      ['data-from', 'data-from-id', 'data-source', 'data-start'].forEach((attribute) => {
+        const value = element.getAttribute(attribute);
+        const mapped = value ? objectIdMap.get(value) : undefined;
+        if (mapped) element.setAttribute(attribute, mapped);
+      });
+      ['data-to', 'data-to-id', 'data-target', 'data-end'].forEach((attribute) => {
+        const value = element.getAttribute(attribute);
+        const mapped = value ? objectIdMap.get(value) : undefined;
+        if (mapped) element.setAttribute(attribute, mapped);
+      });
+    }
+    container.appendChild(element);
+  });
+  if (!insertedObjectIds.length) {
+    return makeEditResult(report);
+  }
+  const nextSection = parseSectionHtml(
+    { ...section, html: sectionRoot.outerHTML, changed: true },
+    report.translations
+  );
+  const insertedNodeId = nextSection.editableNodes.find((node) =>
+    insertedObjectIds.includes(node.sourceRef?.objectId ?? '')
+  )?.id;
+  if (!insertedNodeId) {
+    return makeEditResult(report);
+  }
+  return makeEditResult(
+    markReportChanged(
+      {
+        ...report,
+        sections: report.sections.map((candidate) =>
+          candidate.id === sectionId ? nextSection : candidate
+        )
+      },
+      {
+        type: 'diagram',
+        label: `도식 개체 붙여넣기: ${section.title}`,
+        sectionId,
+        nodeId: insertedNodeId,
+        before: section.html,
+        after: nextSection.html
+      }
+    ),
+    insertedNodeId
+  );
+}
+
+export function deleteEditableNodes(
+  report: ReportDocument,
+  sectionId: string,
+  nodeIds: string[]
+): ReportDocument {
+  const section = findSection(report, sectionId);
+  if (!section || !nodeIds.length) {
+    return report;
+  }
+  const selected = section.editableNodes.filter((node) => nodeIds.includes(node.id));
+  if (!selected.length) {
+    return report;
+  }
+  const objectIds = new Set(
+    selected
+      .map((node) => node.diagram?.objectId ?? node.sourceRef?.objectId)
+      .filter((value): value is string => Boolean(value))
+  );
+  const toDelete = section.editableNodes.filter((node) =>
+    nodeIds.includes(node.id) ||
+    (node.diagram?.role === 'edge' &&
+      Boolean(
+        (node.diagram.fromObjectId && objectIds.has(node.diagram.fromObjectId)) ||
+          (node.diagram.toObjectId && objectIds.has(node.diagram.toObjectId))
+      ))
+  );
+  return mutateSection(
+    report,
+    sectionId,
+    (root) => {
+      toDelete
+        .map((node) => getElementByPath(root, node.path))
+        .filter((element): element is Element => Boolean(element))
+        .sort((left, right) => getElementDepth(right) - getElementDepth(left))
+        .forEach((element) => element.remove());
+    },
+    `개체 삭제: ${section.title}`,
+    'diagram'
+  );
+}
+
+export function applyDiagramLayerCommand(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId: string,
+  command: DiagramLayerCommand
+): ReportDocument {
+  const section = findSection(report, sectionId);
+  const node = section?.editableNodes.find((candidate) => candidate.id === nodeId);
+  if (!section || !node) {
+    return report;
+  }
+  return mutateNode(
+    report,
+    sectionId,
+    nodeId,
+    (_root, element) => {
+      const parent = element.parentElement;
+      if (!parent) return false;
+      if (command === 'front') parent.appendChild(element);
+      if (command === 'back') parent.insertBefore(element, parent.firstElementChild);
+      if (command === 'forward' && element.nextElementSibling) parent.insertBefore(element.nextElementSibling, element);
+      if (command === 'backward' && element.previousElementSibling) parent.insertBefore(element, element.previousElementSibling);
+      return true;
+    },
+    `개체 순서 변경: ${section.title}`
+  );
+}
+
+export function groupEditableNodes(
+  report: ReportDocument,
+  sectionId: string,
+  nodeIds: string[]
+): ReportDocument {
+  const section = findSection(report, sectionId);
+  if (!section || nodeIds.length < 2) return report;
+  return mutateSection(
+    report,
+    sectionId,
+    (root) => {
+      const elements = section.editableNodes
+        .filter((node) => nodeIds.includes(node.id))
+        .map((node) => getElementByPath(root, node.path))
+        .filter((element): element is HTMLElement => element instanceof HTMLElement);
+      const parent = elements[0]?.parentElement;
+      if (!parent || elements.some((element) => element.parentElement !== parent)) return;
+      const group = root.ownerDocument.createElement('div');
+      group.setAttribute('data-htmlpoint-group', 'true');
+      group.className = 'htmlpoint-group';
+      parent.insertBefore(group, elements[0]);
+      elements.forEach((element) => group.appendChild(element));
+    },
+    `개체 그룹화: ${section.title}`,
+    'diagram'
+  );
+}
+
+export function ungroupEditableNode(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId: string
+): ReportDocument {
+  const section = findSection(report, sectionId);
+  const node = section?.editableNodes.find((candidate) => candidate.id === nodeId);
+  if (!section || !node) return report;
+  return mutateSection(
+    report,
+    sectionId,
+    (root) => {
+      const element = getElementByPath(root, node.path);
+      const group = element?.closest<HTMLElement>('[data-htmlpoint-group="true"]');
+      if (!element || !group || !group.parentElement) return;
+      const parent = group.parentElement;
+      while (group.firstChild) parent.insertBefore(group.firstChild, group);
+      group.remove();
+    },
+    `그룹 해제: ${section.title}`,
+    'diagram'
+  );
+}
+
+function getElementDepth(element: Element): number {
+  let depth = 0;
+  let current: Element | null = element;
+  while (current) {
+    depth += 1;
+    current = current.parentElement;
+  }
+  return depth;
+}
+
+interface DiagramInsertion {
+  role: 'node' | 'edge';
+  objectId: string;
+  shapeType?: DiagramShapeType;
+  fromObjectId?: string;
+  toObjectId?: string;
+  label: string;
+}
+
+function insertDiagramObject(
+  report: ReportDocument,
+  sectionId: string,
+  nodeId: string | undefined,
+  insertion: DiagramInsertion
+): EditResult {
+  const section = findSection(report, sectionId);
+  if (!section) {
+    return makeEditResult(report);
+  }
+  const document = parseHtml(section.html);
+  const sectionRoot = document.body.firstElementChild as HTMLElement | null;
+  if (!sectionRoot) {
+    return makeEditResult(report);
+  }
+  let container = sectionRoot.querySelector<HTMLElement>('[data-htmlpoint-diagram="true"]');
+  if (!container) {
+    container = document.createElement('div');
+    container.setAttribute('data-htmlpoint-diagram', 'true');
+    container.style.position = 'relative';
+    container.style.minHeight = '180px';
+    container.style.width = '100%';
+    insertAfterSelectedNode(sectionRoot, report, sectionId, nodeId, container);
+  }
+  const element = document.createElement('div');
+  element.setAttribute('data-htmlpoint-object-id', insertion.objectId);
+  element.setAttribute(
+    insertion.role === 'node' ? 'data-htmlpoint-shape' : 'data-htmlpoint-connector',
+    'true'
+  );
+  element.className = insertion.role === 'node' ? 'htmlpoint-shape' : 'htmlpoint-connector';
+  element.textContent = insertion.label;
+  if (insertion.role === 'node') {
+    element.setAttribute('data-shape-type', insertion.shapeType ?? 'rect');
+    element.style.position = 'absolute';
+    element.style.left = '40px';
+    element.style.top = `${40 + container.querySelectorAll('[data-htmlpoint-shape]').length * 80}px`;
+    element.style.width = '160px';
+    element.style.height = '56px';
+    element.style.display = 'flex';
+    element.style.alignItems = 'center';
+    element.style.justifyContent = 'center';
+    element.style.background = '#e8f2ff';
+    element.style.border = '1px solid #0f4f86';
+    element.style.borderRadius = insertion.shapeType === 'ellipse' ? '50%' : '6px';
+  } else {
+    element.setAttribute('data-from', insertion.fromObjectId ?? '');
+    element.setAttribute('data-to', insertion.toObjectId ?? '');
+    element.style.position = 'absolute';
+    element.style.left = '0';
+    element.style.top = '0';
+    element.style.width = '100%';
+    element.style.height = '0';
+    element.style.borderTop = '2px solid #64748b';
+  }
+  container.appendChild(element);
+  const nextSection = parseSectionHtml(
+    { ...section, html: sectionRoot.outerHTML, changed: true },
+    report.translations
+  );
+  const insertedNodeId = nextSection.editableNodes.find(
+    (node) => node.sourceRef?.objectId === insertion.objectId
+  )?.id;
+  if (!insertedNodeId) {
+    return makeEditResult(report);
+  }
+  const updatedReport = markReportChanged(
+    {
+      ...report,
+      sections: report.sections.map((candidate) =>
+        candidate.id === sectionId ? nextSection : candidate
+      )
+    },
+    {
+      type: 'diagram',
+      label: `${insertion.role === 'node' ? '도형' : '연결선'} 삽입: ${insertion.label}`,
+      sectionId,
+      nodeId: insertedNodeId,
+      before: section.html,
+      after: nextSection.html
+    }
+  );
+  return makeEditResult(updatedReport, insertedNodeId);
+}
+
+function makeInsertedDiagramObjectId(kind: 'shape' | 'connector'): string {
+  insertionTokenSequence += 1;
+  return `htmlpoint-${kind}-${Date.now().toString(36)}-${insertionTokenSequence}`;
 }
 
 function findCapturedRuntimeTable(host: HTMLElement): HTMLTableElement | undefined {
